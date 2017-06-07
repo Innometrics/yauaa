@@ -45,10 +45,6 @@ public class ParseUserAgent extends org.apache.pig.EvalFunc<Tuple>  {
 
             analyzerBuilder.hideMatcherLoadStats();
 
-            if (cacheSize >= 0) {
-                analyzerBuilder.withCache(cacheSize);
-            }
-
             if (!requestedFields.isEmpty()) {
                 for (String requestedField : requestedFields) {
                     analyzerBuilder.withField(requestedField);

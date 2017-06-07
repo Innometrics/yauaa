@@ -28,7 +28,6 @@ import nl.basjes.parse.useragent.utils.Normalize;
 import nl.basjes.parse.useragent.utils.VersionSplitter;
 import nl.basjes.parse.useragent.utils.YamlUtils;
 import org.antlr.v4.runtime.tree.ParseTree;
-import org.apache.commons.collections4.map.LRUMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
@@ -84,7 +83,6 @@ import static nl.basjes.parse.useragent.utils.YamlUtils.getValueAsString;
 public class UserAgentAnalyzer extends Analyzer implements Serializable {
 
     private static final int INFORM_ACTIONS_HASHMAP_SIZE = 300000;
-    private static final int DEFAULT_PARSE_CACHE_SIZE = 10000;
 
     private static final Logger LOG = LoggerFactory.getLogger(UserAgentAnalyzer.class);
     protected final List<Matcher> allMatchers = new ArrayList<>(5000);
@@ -102,50 +100,19 @@ public class UserAgentAnalyzer extends Analyzer implements Serializable {
 
     protected UserAgentTreeFlattener flattener;
 
-    private LRUMap<String, UserAgent> parseCache = new LRUMap<>(DEFAULT_PARSE_CACHE_SIZE);
-
-    /**
-     * Initialize the transient default values
-     */
-    private void setDefaultFieldValues() {
-        matcherConfigs = new HashMap<>(64);
-    }
-
-    private void readObject(java.io.ObjectInputStream stream)
-        throws java.io.IOException, ClassNotFoundException {
-        setDefaultFieldValues();
-        stream.defaultReadObject();
-
-        List<String> lines = new ArrayList<>();
-        lines.add("This Analyzer instance was deserialized.");
-        lines.add("");
-        lines.add("Lookups      : " + ((lookups == null) ? 0 : lookups.size()));
-        lines.add("Matchers     : " + allMatchers.size());
-        lines.add("Hashmap size : " + informMatcherActions.size());
-        lines.add("Testcases    : " + testCases.size());
-//        lines.add("All possible field names:");
-//        int count = 1;
-//        for (String fieldName : getAllPossibleFieldNames()) {
-//            lines.add("- " + count++ + ": " + fieldName);
-//        }
-
-        String[] x = {};
-        logVersion(lines.toArray(x));
-    }
+    private Yaml yaml;
 
     public UserAgentAnalyzer() {
         this(true);
     }
 
     protected UserAgentAnalyzer(boolean initialize) {
-        setDefaultFieldValues();
         if (initialize) {
             initialize();
         }
     }
 
     public UserAgentAnalyzer(String resourceString) {
-        setDefaultFieldValues();
         setShowMatcherStats(true);
         loadResources(resourceString);
     }
@@ -615,7 +582,7 @@ config:
 
     public UserAgent parse(String userAgentString) {
         UserAgent userAgent = new UserAgent(userAgentString);
-        return cachedParse(userAgent);
+        return parse(userAgent);
     }
 
     public UserAgent parse(UserAgent userAgent) {
@@ -623,52 +590,6 @@ config:
             return null;
         }
         userAgent.reset();
-        return cachedParse(userAgent);
-    }
-
-    public void disableCaching() {
-        setCacheSize(0);
-    }
-
-    /**
-     * Sets the new size of the parsing cache.
-     * Note that this will also wipe the existing cache.
-     *
-     * @param newCacheSize The size of the new LRU cache. As size of 0 will disable caching.
-     */
-    public void setCacheSize(int newCacheSize) {
-        if (newCacheSize >= 1) {
-            parseCache = new LRUMap<>(newCacheSize);
-        } else {
-            parseCache = null;
-        }
-    }
-
-    public int getCacheSize() {
-        if (parseCache == null) {
-            return 0;
-        }
-        return parseCache.maxSize();
-    }
-
-    private synchronized UserAgent cachedParse(UserAgent userAgent) {
-        if (parseCache == null) {
-            return nonCachedParse(userAgent);
-        }
-
-        String userAgentString = userAgent.getUserAgentString();
-        UserAgent cachedValue = parseCache.get(userAgentString);
-        if (cachedValue != null) {
-            userAgent.clone(cachedValue);
-        } else {
-            cachedValue = new UserAgent(nonCachedParse(userAgent));
-            parseCache.put(userAgentString, cachedValue);
-        }
-        // We have our answer.
-        return userAgent;
-    }
-
-    private UserAgent nonCachedParse(UserAgent userAgent) {
 
         boolean setVerboseTemporarily = userAgent.isDebug();
 
@@ -889,7 +810,7 @@ config:
             if (preheatIterations > 0) {
                 LOG.info("Preheating JVM by running {} testcases.", preheatIterations);
                 int remainingIterations = preheatIterations;
-                UserAgent userAgent = new UserAgent();
+                int goodResults = 0;
                 while (remainingIterations > 0) {
                     for (Map<String, Map<String, String>> test : testCases) {
                         Map<String, String> input = test.get("input");
@@ -902,15 +823,14 @@ config:
                             continue;
                         }
                         remainingIterations--;
-                        userAgent.setUserAgentString(userAgentString);
-                        userAgent.reset();
-                        nonCachedParse(userAgent);
+                        //Calculate and use result to guarantee not optimized away.
+                        if(!parse(userAgentString).hasSyntaxError()) goodResults++;
                         if (remainingIterations <= 0) {
                             break;
                         }
                     }
                 }
-                LOG.info("Preheating JVM completed.", preheatIterations);
+                LOG.info("Preheating JVM completed. ({} proper results)", preheatIterations, goodResults);
             }
         }
     }
@@ -972,16 +892,6 @@ config:
 
         protected Builder(UserAgentAnalyzer forceAnalyzer) {
             this.uaa = forceAnalyzer;
-        }
-
-        public Builder withCache(int cacheSize) {
-            uaa.setCacheSize(cacheSize);
-            return this;
-        }
-
-        public Builder withoutCache() {
-            uaa.setCacheSize(0);
-            return this;
         }
 
         public Builder preheat(int iterations) {

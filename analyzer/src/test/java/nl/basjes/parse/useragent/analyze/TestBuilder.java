@@ -32,8 +32,6 @@ public class TestBuilder {
             UserAgentAnalyzer
                 .newBuilder()
                 .preheat(100)
-                .withCache(42)
-                .withoutCache()
                 .hideMatcherLoadStats()
                 .showMatcherLoadStats()
                 .withAllFields()
@@ -81,7 +79,6 @@ public class TestBuilder {
 
         UserAgentAnalyzer
             .newBuilder()
-            .withoutCache()
             .hideMatcherLoadStats()
             .withField("FirstNonexistentField")
             .withField("DeviceClass")
