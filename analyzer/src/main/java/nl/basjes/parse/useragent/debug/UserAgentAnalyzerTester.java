@@ -167,7 +167,6 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
 
             long measuredSpeed=-1;
             if (measureSpeed) {
-                disableCaching();
                 // Preheat
                 for (int i = 0; i < 100; i++) {
                     parse(agent);
@@ -508,18 +507,6 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
         @Override
         public UserAgentAnalyzerTester build() {
             return (UserAgentAnalyzerTester)super.build();
-        }
-
-        @Override
-        public UserAgentAnalyzerTester.Builder withCache(int cacheSize) {
-            super.withCache(cacheSize);
-            return this;
-        }
-
-        @Override
-        public UserAgentAnalyzerTester.Builder withoutCache() {
-            super.withoutCache();
-            return this;
         }
 
         @Override

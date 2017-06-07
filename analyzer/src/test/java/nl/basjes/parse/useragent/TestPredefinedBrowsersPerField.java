@@ -57,7 +57,6 @@ public class TestPredefinedBrowsersPerField {
         UserAgentAnalyzerTester userAgentAnalyzer =
             UserAgentAnalyzerTester
                 .newBuilder()
-                .withoutCache()
                 .withField(fieldName)
                 .hideMatcherLoadStats()
                 .build();

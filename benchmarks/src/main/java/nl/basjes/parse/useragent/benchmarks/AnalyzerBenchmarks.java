@@ -47,7 +47,6 @@ public class AnalyzerBenchmarks {
         final UserAgentAnalyzer uaa;
         public ThreadState() {
             uaa = new UserAgentAnalyzer();
-            uaa.disableCaching();
         }
     }
 
