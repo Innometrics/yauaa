@@ -49,6 +49,7 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
 
+import static nl.basjes.parse.useragent.analyze.NumberRangeVisitor.NUMBER_RANGE_VISITOR;
 import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.BasePathContext;
 import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherCleanVersionContext;
 import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherContext;
@@ -67,7 +68,6 @@ import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepSta
 public abstract class MatcherAction implements Serializable {
 
     private String matchExpression;
-    private static final NumberRangeVisitor NUMBER_RANGE_VISITOR = new NumberRangeVisitor();
     private TreeExpressionEvaluator evaluator;
 
     TreeExpressionEvaluator getEvaluatorForUnitTesting() {
