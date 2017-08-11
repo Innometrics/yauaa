@@ -19,6 +19,7 @@ package nl.basjes.parse.useragent.analyze;
 
 import nl.basjes.parse.useragent.UserAgent;
 import nl.basjes.parse.useragent.UserAgentAnalyzer;
+import nl.basjes.parse.useragent.debug.UserAgentAnalyzerTester;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
@@ -29,7 +30,7 @@ public class TestBuilder {
     @Test
     public void testLimitedFields() {
         UserAgentAnalyzer userAgentAnalyzer =
-            UserAgentAnalyzer
+            UserAgentAnalyzerTester
                 .newBuilder()
                 .preheat(100)
                 .hideMatcherLoadStats()
@@ -53,20 +54,20 @@ public class TestBuilder {
         Assert.assertEquals("Chrome 53.0.2785.124",     parsedAgent.getValue("AgentNameVersion"         )); // Chrome 53.0.2785.124
 
         // The rest must be at confidence -1 (i.e. no rules fired)
-        Assert.assertEquals(-1, parsedAgent.get("DeviceName"                   ).getConfidence()); // Nexus 6
-        Assert.assertEquals(-1, parsedAgent.get("DeviceBrand"                  ).getConfidence()); // Google
-        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemClass"         ).getConfidence()); // Mobile
-        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemName"          ).getConfidence()); // Android
-        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemVersion"       ).getConfidence()); // 7.0
-        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemNameVersion"   ).getConfidence()); // Android 7.0
+        Assert.assertEquals(-1, parsedAgent.get("DeviceName"                   ).confidence); // Nexus 6
+        Assert.assertEquals(-1, parsedAgent.get("DeviceBrand"                  ).confidence); // Google
+        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemClass"         ).confidence); // Mobile
+        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemName"          ).confidence); // Android
+        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemVersion"       ).confidence); // 7.0
+        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemNameVersion"   ).confidence); // Android 7.0
 //        Assert.assertEquals(-1, parsedAgent.get("OperatingSystemVersionBuild"  ).getConfidence()); // NBD90Z
-        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineClass"            ).getConfidence()); // Browser
-        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineName"             ).getConfidence()); // Blink
-        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineVersion"          ).getConfidence()); // 53.0
-        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineVersionMajor"     ).getConfidence()); // 53
-        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineNameVersion"      ).getConfidence()); // Blink 53.0
-        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineNameVersionMajor" ).getConfidence()); // Blink 53
-        Assert.assertEquals(-1, parsedAgent.get("AgentClass"                   ).getConfidence()); // Browser
+        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineClass"            ).confidence); // Browser
+        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineName"             ).confidence); // Blink
+        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineVersion"          ).confidence); // 53.0
+        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineVersionMajor"     ).confidence); // 53
+        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineNameVersion"      ).confidence); // Blink 53.0
+        Assert.assertEquals(-1, parsedAgent.get("LayoutEngineNameVersionMajor" ).confidence); // Blink 53
+        Assert.assertEquals(-1, parsedAgent.get("AgentClass"                   ).confidence); // Browser
     }
 
     @Rule

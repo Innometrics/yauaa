@@ -17,8 +17,6 @@
 
 package nl.basjes.parse.useragent.analyze;
 
-import nl.basjes.parse.useragent.UserAgent;
-import nl.basjes.parse.useragent.analyze.treewalker.TreeExpressionEvaluator;
 import nl.basjes.parse.useragent.analyze.treewalker.steps.Step;
 import nl.basjes.parse.useragent.analyze.treewalker.steps.WalkList;
 import org.junit.Test;
@@ -26,7 +24,6 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -285,27 +282,30 @@ public class TestTreewalkerParsing {
     }
 
     private void checkPath(String path, String[] expectedHashEntries, String[] expectedWalkList) {
-        Map<String, Map<String, String>> lookups = new HashMap<>();
-        lookups.put("TridentVersions", new HashMap<>());
+        List<String> reveicedValues = new ArrayList<>(128);
+        ActionBuilder actionBuilder = new ActionBuilder() {
+            @Override
+            protected void informMatcherAbout(String pattern, MatcherAction action) {
+                reveicedValues.add(pattern);
+            }
+        };
+        actionBuilder.addLookup("TridentVersions", new HashMap<>());
+        MatcherRequireAction action = actionBuilder.requireAction(path);
 
-        TestMatcher matcher = new TestMatcher(lookups);
-        MatcherRequireAction action = new MatcherRequireAction(path, matcher);
-
-        StringBuilder sb = new StringBuilder("\n---------------------------\nActual list (").append(matcher.reveicedValues.size()).append(" entries):\n");
-        for (String actual : matcher.reveicedValues) {
+        StringBuilder sb = new StringBuilder("\n---------------------------\nActual list (").append(reveicedValues.size()).append(" entries):\n");
+        for (String actual : reveicedValues) {
             sb.append(actual).append('\n');
         }
         sb.append("---------------------------\n");
 
         // Validate the expected hash entries (i.e. the first part of the path)
         for (String expect : expectedHashEntries) {
-            assertTrue("\nMissing:\n" + expect + sb.toString(), matcher.reveicedValues.contains(expect));
+            assertTrue("\nMissing:\n" + expect + sb.toString(), reveicedValues.contains(expect));
         }
-        assertTrue("Found wrong number of entries", expectedHashEntries.length == matcher.reveicedValues.size());
+        assertTrue("Found wrong number of entries", expectedHashEntries.length == reveicedValues.size());
 
         // Validate the expected walk list entries (i.e. the dynamic part of the path)
-        TreeExpressionEvaluator evaluator = action.getEvaluatorForUnitTesting();
-        WalkList walkList = evaluator.getWalkListForUnitTesting();
+        WalkList walkList = action.walkList;
 
         Step step = walkList.getFirstStep();
         for (String walkStep : expectedWalkList) {
@@ -314,28 +314,5 @@ public class TestTreewalkerParsing {
             step = step.getNextStep();
         }
         assertNull(step);
-    }
-
-    private static class TestMatcher extends Matcher {
-        final List<String> reveicedValues = new ArrayList<>(128);
-
-        TestMatcher(Map<String, Map<String, String>> lookups) {
-            super(null, lookups);
-        }
-
-        @Override
-        public void informMeAbout(MatcherAction matcherAction, String keyPattern) {
-            reveicedValues.add(keyPattern);
-        }
-
-        @Override
-        public void analyze(UserAgent userAgent) {
-            // Do nothing
-        }
-
-        @Override
-        public void lookingForRange(String treeName, WordRangeVisitor.Range range) {
-            // Do nothing
-        }
     }
 }

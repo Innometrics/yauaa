@@ -26,9 +26,7 @@ public class TestPerformance {
     @Ignore
     @Test
     public void validateAllPredefinedBrowsersPerformance() {
-        UserAgentAnalyzerTester uaa = new UserAgentAnalyzerTester();
-        uaa.setShowMatcherStats(true);
-        uaa.initialize();
+        UserAgentAnalyzerTester uaa = new UserAgentAnalyzerTester(true);
         Assert.assertTrue(uaa.runTests(false, false, null, true, true));
     }
 

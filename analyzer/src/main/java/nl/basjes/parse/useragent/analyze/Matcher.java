@@ -17,47 +17,38 @@
 
 package nl.basjes.parse.useragent.analyze;
 
-import nl.basjes.parse.useragent.UserAgent;
+import nl.basjes.parse.useragent.analyze.FieldSetter.AgentField;
 import nl.basjes.parse.useragent.utils.YamlUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.yaml.snakeyaml.nodes.MappingNode;
 import org.yaml.snakeyaml.nodes.NodeTuple;
 
 import java.io.Serializable;
-import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
+import static java.util.Collections.emptyList;
 import static nl.basjes.parse.useragent.UserAgent.SET_ALL_FIELDS;
 import static nl.basjes.parse.useragent.utils.YamlUtils.getKeyAsString;
 
 public class Matcher implements Serializable {
-    private static final Logger LOG = LoggerFactory.getLogger(Matcher.class);
+    private static final Logger LOG = LogManager.getLogger(Matcher.class);
 
-    private final Analyzer analyzer;
-    private final List<MatcherAction> dynamicActions;
-    private final List<MatcherAction> fixedStringActions;
+    private static final Collection<MatcherAction.Match> EMPTY_FALLBACK = emptyList();
 
-    private UserAgent newValuesUserAgent = new UserAgent();
-
-    private long actionsThatRequireInput;
-    final Map<String, Map<String, String>> lookups;
-    private boolean verbose;
-    private boolean permanentVerbose;
+    public final MatcherAction[] dynamicActions;
+    private final AgentField[] fixedValues;
 
     // Used for error reporting: The filename where the config was located.
-    private String filename;
+    private final String filename;
 
-    // Package private constructor for testing purposes only
-    Matcher(Analyzer analyzer, Map<String, Map<String, String>> lookups) {
-        this.lookups = lookups;
-        this.analyzer = analyzer;
-        this.fixedStringActions = new ArrayList<>();
-        this.dynamicActions = new ArrayList<>();
-    }
+    private final boolean verbose;
 
     private static class ConfigLine {
         String attribute;
@@ -71,33 +62,26 @@ public class Matcher implements Serializable {
         }
     }
 
-    public Matcher(Analyzer analyzer,
-                   Map<String, Map<String, String>> lookups,
+    public Matcher(ActionBuilder actions,
                    List<String> wantedFieldNames,
                    MappingNode matcherConfig,
                    String filename) throws UselessMatcherException {
-        this.lookups = lookups;
-        this.analyzer = analyzer;
-        this.fixedStringActions = new ArrayList<>();
-        this.dynamicActions = new ArrayList<>();
 
         this.filename = filename + ':' + matcherConfig.getStartMark().getLine();
 
-        verbose = false;
-
+        boolean isVerbose = false;
         boolean hasActiveExtractConfigs = false;
         boolean hasDefinedExtractConfigs = false;
+        boolean allFields = wantedFieldNames == null || wantedFieldNames.isEmpty();
 
         // List of 'attribute', 'confidence', 'expression'
-        List<ConfigLine> configLines = new ArrayList<>(16);
+        ArrayDeque<ConfigLine> configLines = new ArrayDeque<>(16);
         for (NodeTuple nodeTuple: matcherConfig.getValue()) {
             String name = getKeyAsString(nodeTuple, filename);
             switch (name) {
                 case "options":
                     List<String> options = YamlUtils.getStringValues(nodeTuple.getValueNode(), filename);
-                    if (options != null) {
-                        verbose = options.contains("verbose");
-                    }
+                    isVerbose = options != null && options.contains("verbose");
                     break;
                 case "require":
                     for (String requireConfig : YamlUtils.getStringValues(nodeTuple.getValueNode(), filename)) {
@@ -117,7 +101,7 @@ public class Matcher implements Serializable {
 
                         hasDefinedExtractConfigs = true;
                         // If we have a restriction on the wanted fields we check if this one is needed at all
-                        if (wantedFieldNames == null || wantedFieldNames.contains(attribute)) {
+                        if (allFields || wantedFieldNames.contains(attribute)) {
                             configLines.add(new ConfigLine(attribute, confidence, config));
                             hasActiveExtractConfigs = true;
                         } else {
@@ -131,11 +115,11 @@ public class Matcher implements Serializable {
             }
         }
 
-        permanentVerbose = verbose;
-
+        verbose = isVerbose || LOG.isDebugEnabled();
         if (verbose) {
             LOG.info("---------------------------");
             LOG.info("- MATCHER -");
+
         }
 
         if (!hasDefinedExtractConfigs) {
@@ -146,6 +130,9 @@ public class Matcher implements Serializable {
             throw new UselessMatcherException("Does not extract any wanted fields");
         }
 
+        ArrayDeque<MatcherAction> tmpdynamicActions = new ArrayDeque<>();
+        ArrayDeque<AgentField> tmpFixedValues = new ArrayDeque<>();
+
         for (ConfigLine configLine : configLines) {
             if (configLine.attribute == null) {
                 // Require
@@ -153,7 +140,7 @@ public class Matcher implements Serializable {
                     LOG.info("REQUIRE: {}", configLine.expression);
                 }
                 try {
-                    dynamicActions.add(new MatcherRequireAction(configLine.expression, this));
+                    tmpdynamicActions.add(actions.requireAction(configLine.expression));
                 } catch (InvalidParserConfigurationException e) {
                     if (!e.getMessage().startsWith("It is useless to put a fixed value")) {// Ignore fixed values in require
                         throw e;
@@ -165,154 +152,104 @@ public class Matcher implements Serializable {
                     LOG.info("EXTRACT: {}", configLine.expression);
                 }
                 MatcherExtractAction action =
-                    new MatcherExtractAction(configLine.attribute, configLine.confidence, configLine.expression, this);
+                    actions.extractAction(configLine.attribute, configLine.confidence, configLine.expression);
 
-                // Make sure the field actually exists
-                newValuesUserAgent.set(configLine.attribute, "Dummy", -9999);
-                action.setResultAgentField(newValuesUserAgent.get(configLine.attribute));
-
-                if (action.isFixedValue()) {
-                    fixedStringActions.add(action);
-                    action.obtainResult();
+                if (action.fixedValue == null) {
+                    tmpdynamicActions.add(action);
                 } else {
-                    dynamicActions.add(action);
+                    tmpFixedValues.add(new AgentField(action.attribute, action.fixedValue, action.confidence));
                 }
             }
         }
 
-        actionsThatRequireInput = 0;
-        for (MatcherAction action : dynamicActions) {
-            // If an action exists which without any data can be valid, then we must force the evaluation
-            action.reset();
-            if (action.mustHaveMatches()) {
-                actionsThatRequireInput++;
-            }
-        }
-
-        if (verbose) {
-            LOG.info("---------------------------");
-        }
-
+        dynamicActions = tmpdynamicActions.toArray(new MatcherAction[tmpdynamicActions.size()]);
+        fixedValues = tmpFixedValues.toArray(new AgentField[tmpFixedValues.size()]);
+        if (verbose) LOG.info("---------------------------");
     }
 
     public Set<String> getAllPossibleFieldNames() {
         Set<String> results = new TreeSet<>();
         results.addAll(getAllPossibleFieldNames(dynamicActions));
-        results.addAll(getAllPossibleFieldNames(fixedStringActions));
+        for (AgentField fixedValue : fixedValues) {
+            results.add(fixedValue.attribute);
+        }
         results.remove(SET_ALL_FIELDS);
         return results;
     }
 
-    private Set<String> getAllPossibleFieldNames(List<MatcherAction> actions) {
+    private Set<String> getAllPossibleFieldNames(MatcherAction[] actions) {
         Set<String> results = new TreeSet<>();
         for (MatcherAction action: actions) {
             if (action instanceof MatcherExtractAction) {
                 MatcherExtractAction extractAction = (MatcherExtractAction)action;
-                results.add(extractAction.getAttribute());
+                results.add(extractAction.attribute);
             }
         }
         return results;
-    }
-
-    public void lookingForRange(String treeName, WordRangeVisitor.Range range) {
-        analyzer.lookingForRange(treeName, range);
-    }
-
-    public void informMeAbout(MatcherAction matcherAction, String keyPattern) {
-        analyzer.informMeAbout(matcherAction, keyPattern);
     }
 
     /**
      * Fires all matcher actions.
      * IFF all success then we tell the userAgent
      *
-     * @param userAgent The useragent that needs to analyzed
+     * @param setter set matches will be set here.
      */
-    public void analyze(UserAgent userAgent) {
-
-        if (verbose) {
-            LOG.info("");
-            LOG.info("--- Matcher ------------------------");
-            LOG.info("ANALYSE ----------------------------");
-            boolean good = true;
-            for (MatcherAction action : dynamicActions) {
-                if (action.cannotBeValid()) {
-                    LOG.error("CANNOT BE VALID : {}", action.getMatchExpression());
-                    good = false;
-                }
-            }
-            for (MatcherAction action : dynamicActions) {
-                if (!action.obtainResult()) {
-                    LOG.error("FAILED : {}", action.getMatchExpression());
-                    good = false;
-                }
-            }
-            if (good) {
-                LOG.info("COMPLETE ----------------------------");
-            } else  {
-                LOG.info("INCOMPLETE ----------------------------");
-                return;
-            }
-        } else {
-            if (actionsThatRequireInput != actionsThatRequireInputAndReceivedInput) {
-                return;
-            }
-            for (MatcherAction action : dynamicActions) {
-                if (action.obtainResult()) {
-                    continue;
-                }
-                return; // If one of them is bad we skip the rest
-            }
+    public final void analyze(FieldSetter setter, Map<MatcherAction, Collection<MatcherAction.Match>> matches) {
+        if (isVerbose()) {
+            analyzeWithLogging(setter, matches);
+            return;
         }
-        userAgent.set(newValuesUserAgent, this);
-    }
 
-    public boolean getVerbose() {
-        return verbose;
-    }
-
-    private long actionsThatRequireInputAndReceivedInput = 0;
-    void gotMyFirstStartingPoint() {
-        actionsThatRequireInputAndReceivedInput++;
-    }
-
-    public void reset(boolean setVerboseTemporarily) {
-        // If there are no dynamic actions we have fixed strings only
-        actionsThatRequireInputAndReceivedInput = 0;
         for (MatcherAction action : dynamicActions) {
-            action.reset();
-            if (setVerboseTemporarily) {
-                verbose = true;
-                action.setVerbose(true, true);
-            } else {
-                verbose = permanentVerbose;
+            if (action.notValid(matches.getOrDefault(action, EMPTY_FALLBACK))) return;
+        }
+
+        ArrayDeque<AgentField> values = new ArrayDeque<>();
+        for (MatcherAction action : dynamicActions) {
+            String value = action.obtainResult(matches.getOrDefault(action, EMPTY_FALLBACK));
+            if (value == null) return; // If one of them is bad we skip the rest
+            if(action instanceof MatcherExtractAction) {
+                MatcherExtractAction me = (MatcherExtractAction) action;
+                values.add(new AgentField(me.attribute, value, me.confidence));
             }
         }
+
+        Collections.addAll(values, fixedValues);
+        setter.set(values);
     }
 
-    public List<MatcherAction.Match> getMatches() {
-        List<MatcherAction.Match> allMatches = new ArrayList<>(128);
-        for (MatcherAction action : dynamicActions) {
-            allMatches.addAll(action.getMatches());
-        }
-        return allMatches;
+    private boolean isVerbose() {
+        return verbose || LOG.isDebugEnabled();
     }
 
-    public List<MatcherAction.Match> getUsedMatches() {
-        List<MatcherAction.Match> allMatches = new ArrayList<>(128);
+    private void analyzeWithLogging(FieldSetter setter, Map<MatcherAction, Collection<MatcherAction.Match>> matches) {
+        boolean failing = false;
         for (MatcherAction action : dynamicActions) {
-            if (action.cannotBeValid()) {
-                return new ArrayList<>(); // There is NO way one of them is valid
+            if (action.notValid(matches.getOrDefault(action, EMPTY_FALLBACK))) {
+                failing = true;
+                LOG.error("CANNOT BE VALID : {}", action.matchExpression);
             }
         }
+
+        ArrayDeque<AgentField> values = new ArrayDeque<>();
         for (MatcherAction action : dynamicActions) {
-            if (!action.obtainResult()) {
-                return new ArrayList<>(); // There is NO way one of them is valid
-            } else {
-                allMatches.addAll(action.getMatches());
+            String value = action.obtainResult(matches.getOrDefault(action, EMPTY_FALLBACK));
+            if (value == null) {
+                LOG.error("FAILED : {}", action.matchExpression);
+                failing = true;
+            }
+            if (!failing && action instanceof MatcherExtractAction) {
+                MatcherExtractAction me = (MatcherExtractAction) action;
+                values.add(new AgentField(me.attribute, value, me.confidence));
             }
         }
-        return allMatches;
+        if (failing) {
+            LOG.info("INCOMPLETE ----------------------------");
+            return;
+        }
+        Collections.addAll(values, fixedValues);
+        LOG.info("COMPLETE ----------------------------");
+        setter.set(values);
     }
 
     @Override
@@ -322,7 +259,7 @@ public class Matcher implements Serializable {
         sb.append("    REQUIRE:\n");
         for (MatcherAction action : dynamicActions) {
             if (action instanceof MatcherRequireAction) {
-                sb.append("        ").append(action.getMatchExpression()).append("\n");
+                sb.append("        ").append(action.matchExpression).append("\n");
             }
         }
         sb.append("    EXTRACT:\n");
@@ -331,8 +268,9 @@ public class Matcher implements Serializable {
                 sb.append("        ").append(action.toString()).append("\n");
             }
         }
-        for (MatcherAction action : fixedStringActions) {
-            sb.append("        ").append(action.toString()).append("\n");
+        for (AgentField f : fixedValues) {
+            sb.append("        ").append("FIXED  : (");
+            sb.append(f.attribute).append(", ").append(f.confidence).append(") =   \"").append(f.value).append("\"\n");
         }
         return sb.toString();
     }

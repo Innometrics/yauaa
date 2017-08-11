@@ -69,7 +69,7 @@ public class TestClassifier {
     }
 
     private void verifyEnum(String deviceClass) {
-        UserAgent userAgent = new UserAgent();
+        UserAgent userAgent = new UserAgent("");
         userAgent.set(DEVICE_CLASS, deviceClass, 1 );
         assertEquals(deviceClass, UserAgentClassifier.getDeviceClass(userAgent).getValue());
     }
@@ -99,7 +99,7 @@ public class TestClassifier {
     }
 
     private void verifyDeviceClass(DeviceClass deviceClass, boolean human, boolean mobile, boolean normal, boolean misuse) {
-        UserAgent userAgent = new UserAgent();
+        UserAgent userAgent = new UserAgent("");
 
         userAgent.set(DEVICE_CLASS, deviceClass.getValue(), 1 );
         assertEquals("For the DeviceClass " + deviceClass.toString() + " the isHuman() was incorrect.",

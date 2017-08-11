@@ -18,8 +18,15 @@
 package nl.basjes.parse.useragent;
 
 import nl.basjes.parse.useragent.analyze.MatcherAction;
+import nl.basjes.parse.useragent.debug.DebugUserAgent;
 import nl.basjes.parse.useragent.debug.UserAgentAnalyzerTester;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.Test;
+
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -27,25 +34,20 @@ import static org.junit.Assert.assertTrue;
 
 public class TestDeveloperTools {
 
+    private static final Logger LOG = LogManager.getLogger(TestDeveloperTools.class);
     @Test
     public void validateErrorSituationOutput() {
         UserAgentAnalyzerTester uaa = new UserAgentAnalyzerTester();
-        uaa.setShowMatcherStats(false);
-        uaa.initialize();
-        uaa.eraseTestCases();
-        uaa.setShowMatcherStats(true);
-        uaa.loadResources("classpath*:**/CheckErrorOutput.yaml");
+        ResourceLoader testCases = new ResourceLoader("classpath*:**/CheckErrorOutput.yaml", null, true);
+        uaa.initTests(testCases);
         assertFalse(uaa.runTests(false, true)); // This test must return an error state
     }
 
     @Test
     public void validateNewTestcaseSituationOutput() {
         UserAgentAnalyzerTester uaa = new UserAgentAnalyzerTester();
-        uaa.setShowMatcherStats(false);
-        uaa.initialize();
-        uaa.eraseTestCases();
-        uaa.setShowMatcherStats(true);
-        uaa.loadResources("classpath*:**/CheckNewTestcaseOutput.yaml");
+        ResourceLoader testCases = new ResourceLoader("classpath*:**/CheckNewTestcaseOutput.yaml", null, true);
+        uaa.initTests(testCases);
         assertTrue(uaa.runTests(false, true));
     }
 
@@ -53,31 +55,29 @@ public class TestDeveloperTools {
     @Test
     public void validateStringOutputsAndMatches() {
         UserAgentAnalyzerTester uaa = UserAgentAnalyzerTester.newBuilder().withField("DeviceName").build();
-        UserAgent useragent = uaa.parse("Mozilla/5.0 (Linux; Android 7.0; Nexus 6 Build/NBD90Z) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.124 Mobile Safari/537.36");
+        //- parse, broken down to save matches
+        DebugUserAgent useragent = (DebugUserAgent) uaa.createUserAgent("Mozilla/5.0 (Linux; Android 7.0; Nexus 6 Build/NBD90Z) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.124 Mobile Safari/537.36");
+        Map<MatcherAction, Collection<MatcherAction.Match>> matches = uaa._matches(useragent);
+        uaa._parse(useragent, matches);
+        // ---
         assertTrue(useragent.toString().contains("'Google Nexus 6'"));
         assertTrue(useragent.toJson().contains("\"DeviceName\":\"Google Nexus 6\""));
         assertTrue(useragent.toYamlTestCase(true).contains("'Google Nexus 6'"));
 
-        boolean ok = false;
-        for (MatcherAction.Match match : uaa.getMatches()) {
-            if ("agent.(1)product.(1)comments.(3)entry[3-3]".equals(match.getKey())) {
-                assertEquals("Build", match.getValue());
-                ok = true;
-                break;
-            }
-        }
-        assertTrue("Did not see the expected match.", ok);
+        final String path = "agent.(1)product.(1)comments.(3)entry[3-3]";
 
-        ok = false;
-        for (MatcherAction.Match match : uaa.getUsedMatches(useragent)) {
-            if ("agent.(1)product.(1)comments.(3)entry[3-3]".equals(match.getKey())) {
-                assertEquals("Build", match.getValue());
-                ok = true;
-                break;
-            }
-        }
-        assertTrue("Did not see the expected match.", ok);
+        MatcherAction action = matches.entrySet().stream()
+            .filter(e->e.getValue().stream().anyMatch(m->m.key.equals(path)))
+            .map(Map.Entry::getKey).findFirst()
+            .orElseThrow(()->new NullPointerException("No action for path"));
+
+        MatcherAction.Match match = matches.get(action).stream()
+            .filter(m -> m.key.equals(path)).findFirst()
+            .orElseThrow(()->new NullPointerException("No match for path"));
+
+
+        assertEquals("Build", match.value);
+        assertTrue("Did not see the expected matcher.",
+            useragent.usedMatchers().anyMatch( m->Arrays.stream(m.dynamicActions).anyMatch(action::equals)));
     }
-
-
 }

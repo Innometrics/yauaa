@@ -17,107 +17,38 @@
 
 package nl.basjes.parse.useragent.analyze;
 
-import nl.basjes.parse.useragent.UserAgent;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser;
-import org.antlr.v4.runtime.ParserRuleContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import nl.basjes.parse.useragent.analyze.treewalker.steps.WalkList;
 
-public class MatcherExtractAction extends MatcherAction {
-    private static final Logger LOG = LoggerFactory.getLogger(MatcherExtractAction.class);
+import java.util.Collection;
 
-    private final String attribute;
-    private final long confidence;
-    private String foundValue = null;
-    private String fixedValue = null;
-    private final String expression;
-    private UserAgent.AgentField resultAgentField;
+public final class MatcherExtractAction extends MatcherAction {
 
-    public MatcherExtractAction(String attribute, long confidence, String config, Matcher matcher) {
+    final String attribute;
+    final long confidence;
+    final String fixedValue;
+
+
+    MatcherExtractAction(String attribute, long confidence, String config, WalkList walkList, String fixedValue) {
+        super(config, walkList);
         this.attribute = attribute;
         this.confidence = confidence;
-        expression = config;
-        init(config, matcher);
+        this.fixedValue = fixedValue;
     }
 
-    public void setResultAgentField(UserAgent.AgentField newResultAgentField){
-        resultAgentField = newResultAgentField;
+    @Override
+    public final String obtainResult(Collection<Match> matches) {
+        return fixedValue == null ? processInformedMatches(matches) : fixedValue;
     }
 
-    protected ParserRuleContext parseWalkerExpression(UserAgentTreeWalkerParser parser) {
-        return parser.matcher();
-    }
-
-    public boolean isFixedValue() {
-        return this.fixedValue != null;
-    }
-
-    protected void setFixedValue(String newFixedValue) {
-        if (verbose) {
-            LOG.info("-- set Fixed value({} , {} , {})", attribute, confidence, newFixedValue);
-        }
-        this.fixedValue = newFixedValue;
-    }
-
-    public String getAttribute() {
-        return attribute;
-    }
-
-    public void inform(String key, String newlyFoundValue) {
-        if (verbose) {
-            LOG.info("INFO  : EXTRACT ({}): {}", attribute, key);
-            LOG.info("NEED  : EXTRACT ({}): {}", attribute, getMatchExpression());
-        }
-        /*
-         * We know the tree is parsed from left to right.
-         * This is also the priority in the fields.
-         * So we always use the first value we find.
-         */
-        if (this.foundValue == null) {
-            this.foundValue = newlyFoundValue;
-            if (verbose) {
-                LOG.info("KEPT  : EXTRACT ({}): {}", attribute, key);
-            }
-        } else {
-            if (verbose) {
-                LOG.info("IGNORE: EXTRACT ({}): {}", attribute, key);
-            }
-        }
-    }
-
-    public boolean obtainResult() {
-        processInformedMatches();
-        if (fixedValue != null) {
-            if (verbose) {
-                LOG.info("Set fixedvalue ({})[{}]: {}", attribute, confidence, fixedValue);
-            }
-            resultAgentField.setValueForced(fixedValue, confidence);
-            return true;
-        }
-        if (foundValue != null) {
-            if (verbose) {
-                LOG.info("Set parsevalue ({})[{}]: {}", attribute, confidence, foundValue);
-            }
-            resultAgentField.setValueForced(foundValue, confidence);
-            return true;
-        }
-        if (verbose) {
-            LOG.info("Nothing found for {}", attribute);
-        }
-        return false;
-    }
-
-    public void reset() {
-        super.reset();
-        this.foundValue = null;
+    @Override
+    public boolean notValid(Collection<Match> matches) {
+        return !usesIsNull && fixedValue == null && matches.isEmpty();
     }
 
     @Override
     public String toString() {
-        if (isFixedValue()) {
-            return "FIXED  : (" + attribute + ", " + confidence + ") =   \"" + fixedValue + "\"";
-        } else {
-            return "DYNAMIC: (" + attribute + ", " + confidence + "):    " + expression;
-        }
+        return fixedValue == null
+            ? "DYNAMIC: (" + attribute + ", " + confidence + "):    " + matchExpression
+            : "FIXED  : (" + attribute + ", " + confidence + ") =   \"" + fixedValue + "\"";
     }
 }

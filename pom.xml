@@ -264,6 +264,7 @@
             <!-- Files that cannot be 'polluted' -->
             <exclude>udfs/platfora/src/main/resources/udf-classes.txt</exclude>
             <exclude>examples/pig/testcases.txt</exclude>
+            <exclude>*/src/main/resources/log4j2.xml</exclude>
             <!-- Files from external sources -->
             <exclude>**/analyzer/src/main/resources/UserAgents/AppleTypes/*.csv</exclude>
             <exclude>**/analyzer/src/main/resources/UserAgents/ISOLanguageCode/*.tab</exclude>

@@ -19,36 +19,34 @@ package nl.basjes.parse.useragent.debug;
 
 import nl.basjes.parse.useragent.UserAgent;
 import nl.basjes.parse.useragent.analyze.Matcher;
+import nl.basjes.parse.useragent.analyze.FieldSetter;
 import org.apache.commons.lang3.tuple.ImmutablePair;
-import org.apache.commons.lang3.tuple.Pair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Stream;
 
 public class DebugUserAgent extends UserAgent {
 
-    private static final Logger LOG = LoggerFactory.getLogger(DebugUserAgent.class);
+    private static final Logger LOG = LogManager.getLogger(DebugUserAgent.class);
 
-    final List<Pair<UserAgent, Matcher>> appliedMatcherResults = new ArrayList<>(32);
+    private final ArrayDeque<ImmutablePair<Matcher, Collection<AgentField>>> appliedMatcherResults = new ArrayDeque<>(32);
 
-    @Override
-    public void set(UserAgent newValuesUserAgent, Matcher appliedMatcher) {
-        appliedMatcherResults.add(new ImmutablePair<>(new UserAgent(newValuesUserAgent), appliedMatcher));
-        super.set(newValuesUserAgent, appliedMatcher);
+    public DebugUserAgent(String userAgentString) {
+        super(userAgentString);
     }
 
     @Override
-    public void reset() {
-        appliedMatcherResults.clear();
-        super.reset();
+    public FieldSetter withMatcher(Matcher matcher) {
+        return values -> {
+            set(values);
+            appliedMatcherResults.add(new ImmutablePair<>(matcher, values));
+        };
     }
 
-    public int getNumberOfAppliedMatches() {
-        return appliedMatcherResults.size();
+    public long getNumberOfAppliedMatches() {
+        return appliedMatcherResults.stream().filter(pair -> !pair.getRight().isEmpty()).count();
     }
 
     public String toMatchTrace(List<String> highlightNames) {
@@ -58,63 +56,68 @@ public class DebugUserAgent extends UserAgent {
         sb.append("| Matcher results that have been combined |\n");
         sb.append("+=========================================+\n");
         sb.append("\n");
-
-        for (Pair<UserAgent, Matcher> pair: appliedMatcherResults){
+        appliedMatcherResults.stream().filter(pair -> !pair.getRight().isEmpty()).forEach( pair -> {
             sb.append("\n");
             sb.append("+================\n");
             sb.append("+ Applied matched\n");
             sb.append("+----------------\n");
-            UserAgent result = pair.getLeft();
-            Matcher matcher = pair.getRight();
+            Matcher matcher = pair.getLeft();
+            Collection<AgentField> values = pair.getRight();
             sb.append(matcher.toString());
             sb.append("+----------------\n");
             sb.append("+ Results\n");
             sb.append("+----------------\n");
-            for (String fieldName : result.getAvailableFieldNamesSorted()) {
-                AgentField field = result.get(fieldName);
-                if (field.getConfidence() >= 0) {
+
+            for (String fieldName : getAvailableFieldNamesSorted()) {
+                Optional<AgentField> field = values.stream().filter(value -> value.attribute.equals(fieldName)).findFirst();
+                if (field.isPresent() && field.get().confidence >= 0) {
                     String marker = "";
                     if (highlightNames.contains(fieldName)) {
                         marker = " <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<";
                     }
-                    sb.append("| ").append(fieldName).append('(').append(field.getConfidence()).append(") = ")
-                        .append(field.getValue()).append(marker).append('\n');
+                    sb.append("| ").append(fieldName).append('(').append(field.get().confidence).append(") = ")
+                        .append(field.get().value).append(marker).append('\n');
                 }
             }
             sb.append("+================\n");
-        }
+
+            }
+        );
         return sb.toString();
     }
 
+    public Stream<Matcher> usedMatchers() {
+        return appliedMatcherResults.stream().map(ImmutablePair::getLeft);
+    }
+
     public boolean analyzeMatchersResult() {
-        boolean passed = true;
+        final boolean[] passed = {true};
         for (String fieldName : getAvailableFieldNamesSorted()) {
             Map<Long, String> receivedValues = new HashMap<>(32);
-            for (Pair<UserAgent, Matcher> pair: appliedMatcherResults) {
-                UserAgent result = pair.getLeft();
-                AgentField partialField = result.get(fieldName);
-                if (partialField != null && partialField.getConfidence() >= 0) {
-                    String previousValue = receivedValues.get(partialField.getConfidence());
+            appliedMatcherResults.stream().filter(pair -> !pair.getRight().isEmpty()).forEach(pair -> {
+                Collection<AgentField> values = pair.getRight();
+                Optional<AgentField> partialField = values.stream().filter(value -> value.attribute.equals(fieldName)).findFirst();
+                if (partialField.isPresent() && partialField.get().confidence >= 0) {
+                    String previousValue = receivedValues.get(partialField.get().confidence);
                     if (previousValue != null) {
-                        if (!previousValue.equals(partialField.getValue())) {
-                            if (passed) {
+                        if (!previousValue.equals(partialField.get().value)) {
+                            if (passed[0]) {
                                 LOG.error("***********************************************************");
                                 LOG.error("***        REALLY IMPORTANT ERRORS IN THE RULESET       ***");
                                 LOG.error("*** YOU MUST CHANGE THE CONFIDENCE LEVELS OF YOUR RULES ***");
                                 LOG.error("***********************************************************");
                             }
-                            passed = false;
+                            passed[0] = false;
                             LOG.error("Found different value for \"{}\" with SAME confidence {}: \"{}\" and \"{}\"",
-                                fieldName, partialField.getConfidence(), previousValue, partialField.getValue());
+                                fieldName, partialField.get().confidence, previousValue, partialField.get().value);
                         }
                     } else {
-                        receivedValues.put(partialField.getConfidence(), partialField.getValue());
+                        receivedValues.put(partialField.get().confidence, partialField.get().value);
                     }
                 }
-            }
+
+            });
         }
-        return passed;
+        return passed[0];
     }
-
-
 }

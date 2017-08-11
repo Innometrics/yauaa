@@ -18,7 +18,10 @@
 package nl.basjes.parse.useragent;
 
 import nl.basjes.parse.useragent.analyze.Matcher;
+import nl.basjes.parse.useragent.analyze.FieldSetter;
 import nl.basjes.parse.useragent.parser.UserAgentBaseListener;
+import nl.basjes.parse.useragent.utils.Normalize;
+import nl.basjes.parse.useragent.utils.VersionSplitter;
 import org.antlr.v4.runtime.ANTLRErrorListener;
 import org.antlr.v4.runtime.Parser;
 import org.antlr.v4.runtime.RecognitionException;
@@ -26,21 +29,16 @@ import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.atn.ATNConfigSet;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.apache.commons.lang3.StringEscapeUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.BitSet;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.function.Function;
 
-public class UserAgent extends UserAgentBaseListener implements Serializable, ANTLRErrorListener {
+public class UserAgent extends UserAgentBaseListener implements Serializable, FieldSetter, ANTLRErrorListener {
 
-    private static final Logger LOG = LoggerFactory.getLogger(UserAgent.class);
+    private static final Logger LOG = LogManager.getLogger(UserAgent.class);
     public static final String DEVICE_CLASS = "DeviceClass";
     public static final String DEVICE_BRAND = "DeviceBrand";
     public static final String DEVICE_NAME = "DeviceName";
@@ -82,6 +80,8 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
         AGENT_VERSION_MAJOR
     };
 
+    private static final HashMap<String, AgentField> defaultValues = defaultValues();
+
     private boolean hasSyntaxError;
     private boolean hasAmbiguity;
     private int     ambiguityCount;
@@ -106,15 +106,13 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
             int charPositionInLine,
             String msg,
             RecognitionException e) {
-        if (debug) {
+        if (LOG.isDebugEnabled()) {
             LOG.error("Syntax error");
             LOG.error("Source : {}", userAgentString);
             LOG.error("Message: {}", msg);
         }
         hasSyntaxError = true;
-        AgentField syntaxError = new AgentField("false");
-        syntaxError.setValue("true", 1);
-        allFields.put(SYNTAX_ERROR, syntaxError);
+        allFields.put(SYNTAX_ERROR, new AgentField(SYNTAX_ERROR, "true", 1));
     }
 
     @Override
@@ -153,148 +151,43 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
     }
 
     // The original input value
-    private String userAgentString = null;
+    private final String userAgentString;
 
-    private boolean debug = false;
-
-    public boolean isDebug() {
-        return debug;
-    }
-
-    public void setDebug(boolean newDebug) {
-        this.debug = newDebug;
-    }
-
-    public class AgentField implements Serializable {
-        private final String defaultValue;
-        private String value;
-
-        private long confidence;
-
-        AgentField(String defaultValue) {
-            this.defaultValue = defaultValue;
-            reset();
-        }
-
-        public void reset() {
-            value = defaultValue;
-            confidence = -1;
-        }
-
-        public String getValue() {
-            if (value == null) {
-                return defaultValue;
-            }
-            return value;
-        }
-
-        public long getConfidence() {
-            if (value == null) {
-                return -1; // Lie in case the value was wiped.
-            }
-            return confidence;
-        }
-
-
-        public boolean setValue(AgentField field) {
-            return setValue(field.value, field.confidence);
-        }
-
-        public boolean setValue(String newValue, long newConfidence) {
-            if (newConfidence > this.confidence) {
-                this.confidence = newConfidence;
-
-                if (NULL_VALUE.equals(newValue)) {
-                    this.value = defaultValue;
-                } else {
-                    this.value = newValue;
-                }
-                return true;
-            }
-            return false;
-        }
-
-        public void setValueForced(String newValue, long newConfidence) {
-            this.confidence = newConfidence;
-
-            if (NULL_VALUE.equals(newValue)) {
-                this.value = defaultValue;
-            } else {
-                this.value = newValue;
-            }
-        }
-
-        @Override
-        public String toString() {
-            return ">" + this.value + "#" + this.confidence + "<";
-        }
-    }
-
-    private final Map<String, AgentField> allFields = new HashMap<>(32);
-
-
-    public UserAgent() {
-        init();
-    }
+    public final Map<String, AgentField> allFields = new HashMap<>(defaultValues);
 
     public UserAgent(String userAgentString) {
-        init();
-        setUserAgentString(userAgentString);
+        this.userAgentString = userAgentString;
     }
 
-    public UserAgent(UserAgent userAgent) {
-        clone(userAgent);
-    }
 
-    public void clone(UserAgent userAgent) {
-        init();
-        setUserAgentString(userAgentString);
-        for (Map.Entry<String, AgentField> entry : userAgent.allFields.entrySet()) {
-            set(entry.getKey(), entry.getValue().getValue(), entry.getValue().confidence);
-        }
-    }
-
-    private void init() {
+    private static HashMap<String, AgentField> defaultValues() {
+        HashMap<String, AgentField> map = new HashMap<>(32);
         // Device : Family - Brand - Model
-        allFields.put(DEVICE_CLASS,                  new AgentField(UNKNOWN_VALUE)); // Hacker / Cloud / Server / Desktop / Tablet / Phone / Watch
-        allFields.put(DEVICE_BRAND,                  new AgentField(UNKNOWN_VALUE)); // (Google/AWS/Asure) / ????
-        allFields.put(DEVICE_NAME,                   new AgentField(UNKNOWN_VALUE)); // (Google/AWS/Asure) / ????
+        map.put(DEVICE_CLASS,                  new AgentField(DEVICE_CLASS, UNKNOWN_VALUE, -1)); // Hacker / Cloud / Server / Desktop / Tablet / Phone / Watch
+        map.put(DEVICE_BRAND,                  new AgentField(DEVICE_BRAND, UNKNOWN_VALUE, -1)); // (Google/AWS/Asure) / ????
+        map.put(DEVICE_NAME,                   new AgentField(DEVICE_NAME, UNKNOWN_VALUE, -1)); // (Google/AWS/Asure) / ????
 
         // Operating system
-        allFields.put(OPERATING_SYSTEM_CLASS,        new AgentField(UNKNOWN_VALUE)); // Cloud, Desktop, Mobile, Embedded
-        allFields.put(OPERATING_SYSTEM_NAME,         new AgentField(UNKNOWN_VALUE)); // ( Linux / Android / Windows ...)
-        allFields.put(OPERATING_SYSTEM_VERSION,      new AgentField(UNKNOWN_VERSION)); // 1.2 / 43 / ...
+        map.put(OPERATING_SYSTEM_CLASS,        new AgentField(OPERATING_SYSTEM_CLASS, UNKNOWN_VALUE, -1)); // Cloud, Desktop, Mobile, Embedded
+        map.put(OPERATING_SYSTEM_NAME,         new AgentField(OPERATING_SYSTEM_NAME, UNKNOWN_VALUE, -1)); // ( Linux / Android / Windows ...)
+        map.put(OPERATING_SYSTEM_VERSION,      new AgentField(OPERATING_SYSTEM_VERSION, UNKNOWN_VERSION, -1)); // 1.2 / 43 / ...
 
         // Engine : Class (=None/Hacker/Robot/Browser) - Name - Version
-        allFields.put(LAYOUT_ENGINE_CLASS,           new AgentField(UNKNOWN_VALUE)); // None / Hacker / Robot / Browser /
-        allFields.put(LAYOUT_ENGINE_NAME,            new AgentField(UNKNOWN_VALUE)); // ( GoogleBot / Bing / ...) / (Trident / Gecko / ...)
-        allFields.put(LAYOUT_ENGINE_VERSION,         new AgentField(UNKNOWN_VERSION)); // 1.2 / 43 / ...
-        allFields.put(LAYOUT_ENGINE_VERSION_MAJOR,   new AgentField(UNKNOWN_VERSION)); // 1 / 43 / ...
+        map.put(LAYOUT_ENGINE_CLASS,           new AgentField(LAYOUT_ENGINE_CLASS, UNKNOWN_VALUE, -1)); // None / Hacker / Robot / Browser /
+        map.put(LAYOUT_ENGINE_NAME,            new AgentField(LAYOUT_ENGINE_NAME, UNKNOWN_VALUE, -1)); // ( GoogleBot / Bing / ...) / (Trident / Gecko / ...)
+        map.put(LAYOUT_ENGINE_VERSION,         new AgentField(LAYOUT_ENGINE_VERSION, UNKNOWN_VERSION, -1)); // 1.2 / 43 / ...
+        map.put(LAYOUT_ENGINE_VERSION_MAJOR,   new AgentField(LAYOUT_ENGINE_VERSION_MAJOR, UNKNOWN_VERSION, -1)); // 1 / 43 / ...
 
         // Agent: Class (=Hacker/Robot/Browser) - Name - Version
-        allFields.put(AGENT_CLASS,                   new AgentField(UNKNOWN_VALUE)); // Hacker / Robot / Browser /
-        allFields.put(AGENT_NAME,                    new AgentField(UNKNOWN_VALUE)); // ( GoogleBot / Bing / ...) / ( Firefox / Chrome / ... )
-        allFields.put(AGENT_VERSION,                 new AgentField(UNKNOWN_VERSION)); // 1.2 / 43 / ...
-        allFields.put(AGENT_VERSION_MAJOR,           new AgentField(UNKNOWN_VERSION)); // 1 / 43 / ...
-    }
-
-    public void setUserAgentString(String newUserAgentString) {
-        this.userAgentString = newUserAgentString;
-        reset();
+        map.put(AGENT_CLASS,                   new AgentField(AGENT_CLASS, UNKNOWN_VALUE, -1)); // Hacker / Robot / Browser /
+        map.put(AGENT_NAME,                    new AgentField(AGENT_NAME, UNKNOWN_VALUE, -1)); // ( GoogleBot / Bing / ...) / ( Firefox / Chrome / ... )
+        map.put(AGENT_VERSION,                 new AgentField(AGENT_VERSION, UNKNOWN_VERSION, -1)); // 1.2 / 43 / ...
+        map.put(AGENT_VERSION_MAJOR,           new AgentField(AGENT_VERSION_MAJOR, UNKNOWN_VERSION, -1)); // 1 / 43 / ...
+        return map;
     }
 
     public String getUserAgentString() {
         return userAgentString;
-    }
-
-    public void reset() {
-        hasSyntaxError = false;
-        hasAmbiguity = false;
-        ambiguityCount = 0;
-
-        for (AgentField field : allFields.values()) {
-            field.reset();
-        }
     }
 
     static boolean isSystemField(String fieldname) {
@@ -305,91 +198,66 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
 
     public void processSetAll() {
         AgentField setAllField = allFields.get(SET_ALL_FIELDS);
-        if (setAllField == null) {
-            return;
-        }
-        String value = setAllField.getValue();
-        Long confidence = setAllField.confidence;
+        if (setAllField == null) return;
+        boolean useDefault = NULL_VALUE.equals(setAllField.value);
+        final Function<Map.Entry<String, AgentField>, AgentField> updateField = useDefault ?
+            e-> new AgentField(e.getKey(), getDefaultValue(e.getKey()), -1) :
+            e-> new AgentField(e.getKey(), setAllField.value, setAllField.confidence);
+
         for (Map.Entry<String, AgentField> fieldEntry : allFields.entrySet()) {
-            if (!isSystemField(fieldEntry.getKey())) {
-                fieldEntry.getValue().setValue(value, confidence);
-            }
+            if (isSystemField(fieldEntry.getKey())) continue;
+            if (fieldEntry.getValue().confidence >= setAllField.confidence) continue;
+            fieldEntry.setValue(updateField.apply(fieldEntry));
+        }
+    }
+
+    public FieldSetter withMatcher(Matcher matcher) {
+        return this;
+    }
+
+    @Override
+    public void set(Collection<AgentField> values) {
+        values.forEach(this::set);
+    }
+
+    private void set(AgentField incoming) {
+        AgentField field = get(incoming.attribute);
+        boolean wasEmpty = incoming.confidence == -1;
+        boolean update = field == null || incoming.confidence > field.confidence;
+        boolean useDefault = NULL_VALUE.equals(incoming.value) && !SET_ALL_FIELDS.equals(incoming.attribute);
+        if (update) {
+            allFields.put(incoming.attribute,
+                useDefault
+                    ? new AgentField(incoming.attribute, getDefaultValue(incoming.attribute), incoming.confidence)
+                    : incoming);
+        }
+
+        if (!wasEmpty) {
+            LOG.debug("{}  {} ({}) = {}", update ? "USE" : "SKIP", incoming.attribute, incoming.confidence, incoming.value);
         }
     }
 
     public void set(String attribute, String value, long confidence) {
-        AgentField field = allFields.get(attribute);
-        if (field == null) {
-            field = new AgentField(null); // The fields we do not know get a 'null' default
-        }
-
-        boolean wasEmpty = confidence == -1;
-        boolean updated = field.setValue(value, confidence);
-        if (debug && !wasEmpty) {
-            if (updated) {
-                LOG.info("USE  {} ({}) = {}", attribute, confidence, value);
-            } else {
-                LOG.info("SKIP {} ({}) = {}", attribute, confidence, value);
-            }
-        }
-        allFields.put(attribute, field);
+        set(new AgentField(attribute, value, confidence));
     }
 
-    public void setForced(String attribute, String value, long confidence) {
-        AgentField field = allFields.get(attribute);
-        if (field == null) {
-            field = new AgentField(null); // The fields we do not know get a 'null' default
-        }
-
-        boolean wasEmpty = confidence == -1;
-        field.setValueForced(value, confidence);
-        if (debug && !wasEmpty) {
-            LOG.info("USE  {} ({}) = {}", attribute, confidence, value);
-        }
-        allFields.put(attribute, field);
-    }
-
-    // The appliedMatcher parameter is needed for development and debugging.
-    public void set(UserAgent newValuesUserAgent, Matcher appliedMatcher) {
-        for (String fieldName : newValuesUserAgent.allFields.keySet()) {
-            set(fieldName, newValuesUserAgent.allFields.get(fieldName));
-        }
-    }
-
-    private void set(String fieldName, AgentField agentField) {
-        set(fieldName, agentField.value, agentField.confidence);
-    }
-
-    public AgentField get(String fieldName) {
-        if (USERAGENT.equals(fieldName)) {
-            AgentField agentField = new AgentField(userAgentString);
-            agentField.setValue(userAgentString, 0L);
-            return agentField;
-        } else {
-            return allFields.get(fieldName);
-        }
+    public AgentField get(String attribute) {
+        return allFields.get(attribute);
     }
 
     public String getValue(String fieldName) {
-        if (USERAGENT.equals(fieldName)) {
-            return userAgentString;
-        }
-        AgentField field = allFields.get(fieldName);
-        if (field == null) {
-            return UNKNOWN_VALUE;
-        }
-        return field.getValue();
+        AgentField field = get(fieldName);
+        return field == null ? UNKNOWN_VALUE : field.value;
     }
 
     public Long getConfidence(String fieldName) {
-        if (USERAGENT.equals(fieldName)) {
-            return 0L;
-        }
-        AgentField field = allFields.get(fieldName);
-        if (field == null) {
-            return -1L;
-        }
-        return field.getConfidence();
+        AgentField field = get(fieldName);
+        return field == null || field.value == null ? -1L : field.confidence;
+    }
+
+    private String getDefaultValue(String name) {
+        AgentField v = defaultValues.get(name);
+        return v == null ? null : v.value;
     }
 
     public String toYamlTestCase() {
@@ -413,11 +281,10 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
 
         int maxNameLength = 30;
         int maxValueLength = 0;
-        for (String fieldName : allFields.keySet()) {
-            maxNameLength = Math.max(maxNameLength, fieldName.length());
-        }
         for (String fieldName : fieldNames) {
-            maxValueLength = Math.max(maxValueLength, get(fieldName).getValue().length());
+            maxNameLength = Math.max(maxNameLength, fieldName.length());
+            String v = getValue(fieldName);
+            if(v != null) maxValueLength = Math.max(maxValueLength, v.length());
         }
 
         for (String fieldName : fieldNames) {
@@ -425,13 +292,13 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
             for (int l = fieldName.length(); l < maxNameLength + 7; l++) {
                 sb.append(' ');
             }
-            String value = get(fieldName).getValue();
-            sb.append(": '").append(value).append('\'');
+            AgentField field = get(fieldName);
+            sb.append(": '").append(field.value).append('\'');
             if (showConfidence) {
-                for (int l = value.length(); l < maxValueLength + 5; l++) {
+                for (int l = field.value == null ? 0 : field.value.length(); l < maxValueLength + 5; l++) {
                     sb.append(' ');
                 }
-                sb.append("# ").append(get(fieldName).confidence);
+                sb.append("# ").append(field.confidence);
             }
             sb.append('\n');
         }
@@ -510,12 +377,12 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
         for (String fieldName : fieldNames) {
             if (!"Useragent".equals(fieldName)) {
                 AgentField field = allFields.get(fieldName);
-                if (field.getValue() != null) {
+                if (field.value != null) {
                     sb.append("    ").append(fieldName);
                     for (int l = fieldName.length(); l < maxLength + 2; l++) {
                         sb.append(' ');
                     }
-                    sb.append(": '").append(field.getValue()).append('\'');
+                    sb.append(": '").append(field.value).append('\'');
                     sb.append('\n');
                 }
             }
@@ -527,12 +394,10 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
         List<String> resultSet = new ArrayList<>(allFields.size()+10);
         resultSet.addAll(Arrays.asList(STANDARD_FIELDS));
         for (String fieldName : allFields.keySet()) {
-            if (!resultSet.contains(fieldName)){
-                AgentField field = allFields.get(fieldName);
-                if (field != null && field.confidence >= 0 && field.getValue() != null) {
-                    resultSet.add(fieldName);
-                }
-            }
+            if (resultSet.contains(fieldName)) continue;
+            AgentField field = allFields.get(fieldName);
+            if (field == null || field.value == null || field.confidence < 0) continue;
+            resultSet.add(fieldName);
         }
 
         // This is not a field; this is a special operator.
@@ -542,68 +407,66 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
 
     // We manually sort the list of fields to ensure the output is consistent.
     // Any unspecified fieldnames will be appended to the end.
-    public static final List<String> PRE_SORTED_FIELDS_LIST = new ArrayList<>(32);
+    public static final String[] PRE_SORTED_FIELDS_LIST = {
+        "DeviceClass",
+        "DeviceName",
+        "DeviceBrand",
+        "DeviceCpu",
+        "DeviceFirmwareVersion",
+        "DeviceVersion",
 
-    static {
-        PRE_SORTED_FIELDS_LIST.add("DeviceClass");
-        PRE_SORTED_FIELDS_LIST.add("DeviceName");
-        PRE_SORTED_FIELDS_LIST.add("DeviceBrand");
-        PRE_SORTED_FIELDS_LIST.add("DeviceCpu");
-        PRE_SORTED_FIELDS_LIST.add("DeviceFirmwareVersion");
-        PRE_SORTED_FIELDS_LIST.add("DeviceVersion");
+        "OperatingSystemClass",
+        "OperatingSystemName",
+        "OperatingSystemVersion",
+        "OperatingSystemNameVersion",
+        "OperatingSystemVersionBuild",
 
-        PRE_SORTED_FIELDS_LIST.add("OperatingSystemClass");
-        PRE_SORTED_FIELDS_LIST.add("OperatingSystemName");
-        PRE_SORTED_FIELDS_LIST.add("OperatingSystemVersion");
-        PRE_SORTED_FIELDS_LIST.add("OperatingSystemNameVersion");
-        PRE_SORTED_FIELDS_LIST.add("OperatingSystemVersionBuild");
+        "LayoutEngineClass",
+        "LayoutEngineName",
+        "LayoutEngineVersion",
+        "LayoutEngineVersionMajor",
+        "LayoutEngineNameVersion",
+        "LayoutEngineNameVersionMajor",
+        "LayoutEngineBuild",
 
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineClass");
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineName");
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineVersion");
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineVersionMajor");
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineNameVersion");
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineNameVersionMajor");
-        PRE_SORTED_FIELDS_LIST.add("LayoutEngineBuild");
+        "AgentClass",
+        "AgentName",
+        "AgentVersion",
+        "AgentVersionMajor",
+        "AgentNameVersion",
+        "AgentNameVersionMajor",
+        "AgentBuild",
+        "AgentLanguage",
+        "AgentLanguageCode",
+        "AgentInformationEmail",
+        "AgentInformationUrl",
+        "AgentSecurity",
+        "AgentUuid",
 
-        PRE_SORTED_FIELDS_LIST.add("AgentClass");
-        PRE_SORTED_FIELDS_LIST.add("AgentName");
-        PRE_SORTED_FIELDS_LIST.add("AgentVersion");
-        PRE_SORTED_FIELDS_LIST.add("AgentVersionMajor");
-        PRE_SORTED_FIELDS_LIST.add("AgentNameVersion");
-        PRE_SORTED_FIELDS_LIST.add("AgentNameVersionMajor");
-        PRE_SORTED_FIELDS_LIST.add("AgentBuild");
-        PRE_SORTED_FIELDS_LIST.add("AgentLanguage");
-        PRE_SORTED_FIELDS_LIST.add("AgentLanguageCode");
-        PRE_SORTED_FIELDS_LIST.add("AgentInformationEmail");
-        PRE_SORTED_FIELDS_LIST.add("AgentInformationUrl");
-        PRE_SORTED_FIELDS_LIST.add("AgentSecurity");
-        PRE_SORTED_FIELDS_LIST.add("AgentUuid");
+        "FacebookCarrier",
+        "FacebookDeviceClass",
+        "FacebookDeviceName",
+        "FacebookDeviceVersion",
+        "FacebookFBOP",
+        "FacebookFBSS",
+        "FacebookOperatingSystemName",
+        "FacebookOperatingSystemVersion",
 
-        PRE_SORTED_FIELDS_LIST.add("FacebookCarrier");
-        PRE_SORTED_FIELDS_LIST.add("FacebookDeviceClass");
-        PRE_SORTED_FIELDS_LIST.add("FacebookDeviceName");
-        PRE_SORTED_FIELDS_LIST.add("FacebookDeviceVersion");
-        PRE_SORTED_FIELDS_LIST.add("FacebookFBOP");
-        PRE_SORTED_FIELDS_LIST.add("FacebookFBSS");
-        PRE_SORTED_FIELDS_LIST.add("FacebookOperatingSystemName");
-        PRE_SORTED_FIELDS_LIST.add("FacebookOperatingSystemVersion");
+        "Anonymized",
 
-        PRE_SORTED_FIELDS_LIST.add("Anonymized");
+        "HackerAttackVector",
+        "HackerToolkit",
 
-        PRE_SORTED_FIELDS_LIST.add("HackerAttackVector");
-        PRE_SORTED_FIELDS_LIST.add("HackerToolkit");
+        "KoboAffiliate",
+        "KoboPlatformId",
 
-        PRE_SORTED_FIELDS_LIST.add("KoboAffiliate");
-        PRE_SORTED_FIELDS_LIST.add("KoboPlatformId");
+        "IECompatibilityVersion",
+        "IECompatibilityVersionMajor",
+        "IECompatibilityNameVersion",
+        "IECompatibilityNameVersionMajor",
 
-        PRE_SORTED_FIELDS_LIST.add("IECompatibilityVersion");
-        PRE_SORTED_FIELDS_LIST.add("IECompatibilityVersionMajor");
-        PRE_SORTED_FIELDS_LIST.add("IECompatibilityNameVersion");
-        PRE_SORTED_FIELDS_LIST.add("IECompatibilityNameVersionMajor");
-
-        PRE_SORTED_FIELDS_LIST.add(SYNTAX_ERROR);
-    }
+        SYNTAX_ERROR
+    };
 
     public List<String> getAvailableFieldNamesSorted() {
         List<String> fieldNames = new ArrayList<>(getAvailableFieldNames());
@@ -618,8 +481,123 @@ public class UserAgent extends UserAgentBaseListener implements Serializable, AN
         Collections.sort(fieldNames);
         result.addAll(fieldNames);
         return result;
-
     }
 
+    void hardCodedPostProcessing(boolean addUserAgentStr, boolean canDetectHacker) {
+        // If it is really really bad ... then it is a Hacker.
+        if (canDetectHacker && "true".equals(getValue(SYNTAX_ERROR))) {
+            if (getConfidence(DEVICE_CLASS) == -1 &&
+                getConfidence(OPERATING_SYSTEM_CLASS) == -1 &&
+                getConfidence(LAYOUT_ENGINE_CLASS) == -1)  {
 
+                set(DEVICE_BRAND, "Hacker", 10);
+                set(DEVICE_CLASS, "Hacker", 10);
+                set(DEVICE_NAME, "Hacker", 10);
+                set(DEVICE_VERSION, "Hacker", 10);
+                set(OPERATING_SYSTEM_CLASS, "Hacker", 10);
+                set(OPERATING_SYSTEM_NAME, "Hacker", 10);
+                set(OPERATING_SYSTEM_VERSION, "Hacker", 10);
+                set(LAYOUT_ENGINE_CLASS, "Hacker", 10);
+                set(LAYOUT_ENGINE_NAME, "Hacker", 10);
+                set(LAYOUT_ENGINE_VERSION, "Hacker", 10);
+                set(LAYOUT_ENGINE_VERSION_MAJOR, "Hacker", 10);
+                set(AGENT_CLASS, "Hacker", 10);
+                set(AGENT_NAME, "Hacker", 10);
+                set(AGENT_VERSION, "Hacker", 10);
+                set(AGENT_VERSION_MAJOR, "Hacker", 10);
+                set("HackerToolkit", "Unknown", 10);
+                set("HackerAttackVector", "Unknown", 10);
+            }
+        }
+
+        if(addUserAgentStr) set(USERAGENT, getUserAgentString(), 0);
+
+        // !!!!!!!!!! NOTE !!!!!!!!!!!!
+        // IF YOU ADD ANY EXTRA FIELDS YOU MUST ADD THEM TO THE BUILDER TOO !!!!
+        // TODO: Perhaps this should be more generic. Like a "Post processor"  (Generic: Create fields from fields)?
+        addMajorVersionField(AGENT_VERSION, AGENT_VERSION_MAJOR);
+        addMajorVersionField(LAYOUT_ENGINE_VERSION, LAYOUT_ENGINE_VERSION_MAJOR);
+        addMajorVersionField("WebviewAppVersion", "WebviewAppVersionMajor");
+
+        concatFieldValuesNONDuplicated("AgentNameVersion",               AGENT_NAME,             AGENT_VERSION);
+        concatFieldValuesNONDuplicated("AgentNameVersionMajor",          AGENT_NAME,             AGENT_VERSION_MAJOR);
+        concatFieldValuesNONDuplicated("WebviewAppNameVersionMajor",     "WebviewAppName",       "WebviewAppVersionMajor");
+        concatFieldValuesNONDuplicated("LayoutEngineNameVersion",        LAYOUT_ENGINE_NAME,     LAYOUT_ENGINE_VERSION);
+        concatFieldValuesNONDuplicated("LayoutEngineNameVersionMajor",   LAYOUT_ENGINE_NAME,     LAYOUT_ENGINE_VERSION_MAJOR);
+        concatFieldValuesNONDuplicated("OperatingSystemNameVersion",     OPERATING_SYSTEM_NAME,  OPERATING_SYSTEM_VERSION);
+
+        // The device brand field is a mess.
+        AgentField deviceBrand = get(DEVICE_BRAND);
+        if (deviceBrand.nonNullConfidence() >= 0) {
+            set(
+                DEVICE_BRAND,
+                Normalize.brand(deviceBrand.value),
+                deviceBrand.confidence + 1);
+        }
+
+        // The email address is a mess
+        AgentField email = get("AgentInformationEmail");
+        if (email != null && email.nonNullConfidence() >= 0) {
+            set(
+                "AgentInformationEmail",
+                Normalize.email(email.value),
+                email.confidence + 1);
+        }
+
+        // Make sure the DeviceName always starts with the DeviceBrand
+        AgentField deviceName = get(DEVICE_NAME);
+        if (deviceName.nonNullConfidence() >= 0) {
+            deviceBrand = get(DEVICE_BRAND);
+            String deviceNameValue = (deviceName.value == null ? defaultValues.get(DEVICE_NAME) : deviceName).value;
+            // In some cases it does start with the brand but without a separator following the brand
+            deviceNameValue = (deviceBrand.nonNullConfidence() >= 0 && !deviceBrand.value.equals("Unknown"))
+                ? Normalize.cleanupDeviceBrandName(deviceBrand.value, deviceNameValue)
+                : Normalize.brand(deviceNameValue);
+
+            set(
+                DEVICE_NAME,
+                deviceNameValue,
+                deviceName.confidence + 1);
+        }
+    }
+
+    private void concatFieldValuesNONDuplicated(String targetName, String firstName, String secondName) {
+        AgentField first = get(firstName);
+        AgentField second = get(secondName);
+        boolean firstIsNull = first == null || first.value == null;
+        boolean secondIsNull = second == null || second.value == null;
+        if (firstIsNull) {
+            if (!secondIsNull && second.confidence >= 0) {
+                set(targetName, second.value, second.confidence);
+            } //else both null - nothing to do
+            return;
+        }
+        if(secondIsNull) {
+            if (first.confidence >= 0) {
+                set(targetName, first.value, first.confidence);
+            }
+            return;
+        }
+        if(first.value.equals(second.value)) {
+            set(targetName, first.value, first.confidence);
+            return;
+        }
+        if (second.value.startsWith(first.value)) {
+            set(targetName, second.value, second.confidence);
+            return;
+        }
+        set(targetName, first.value + " " + second.value, Math.max(first.confidence, second.confidence));
+    }
+
+    private void addMajorVersionField(String versionName, String majorVersionName) {
+        AgentField agentVersionMajor = get(majorVersionName);
+        if (agentVersionMajor != null && agentVersionMajor.value != null && agentVersionMajor.confidence != -1) return;
+        AgentField agentVersion = get(versionName);
+        if (agentVersion == null) return;
+        set(
+            majorVersionName,
+            VersionSplitter.getInstance().getSingleSplit(agentVersion.value == null ? getDefaultValue(versionName) : agentVersion.value, 1),
+            agentVersion.value == null ? -1 : agentVersion.confidence
+        );
+    }
 }

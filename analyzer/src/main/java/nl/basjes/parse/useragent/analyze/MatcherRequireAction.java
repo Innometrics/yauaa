@@ -17,60 +17,28 @@
 
 package nl.basjes.parse.useragent.analyze;
 
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser;
-import org.antlr.v4.runtime.ParserRuleContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import nl.basjes.parse.useragent.analyze.treewalker.steps.WalkList;
 
-public class MatcherRequireAction extends MatcherAction {
-    private static final Logger LOG = LoggerFactory.getLogger(MatcherRequireAction.class);
+import java.util.Collection;
 
-    public MatcherRequireAction(String config, Matcher matcher) {
-        init(config, matcher);
-    }
+public final class MatcherRequireAction extends MatcherAction {
 
-    protected ParserRuleContext parseWalkerExpression(UserAgentTreeWalkerParser parser) {
-        return parser.matcherRequire();
-    }
-
-    protected void setFixedValue(String fixedValue) {
-        throw new InvalidParserConfigurationException(
-                "It is useless to put a fixed value \"" + fixedValue + "\" in the require section.");
-    }
-
-    private boolean foundRequiredValue = false;
-
-    @Override
-    public void inform(String key, String foundValue) {
-        foundRequiredValue = true;
-        if (verbose) {
-            LOG.info("Info REQUIRE: {}", key);
-            LOG.info("NEED REQUIRE: {}", getMatchExpression());
-            LOG.info("KEPT REQUIRE: {}", key);
-        }
+    MatcherRequireAction(String matchExpression, WalkList walkList) {
+        super(matchExpression, walkList);
     }
 
     @Override
-    public boolean obtainResult() {
-        if (isValidIsNull()) {
-            foundRequiredValue = true;
-        }
-        processInformedMatches();
-        return foundRequiredValue;
+    public String obtainResult(Collection<Match> matches) {
+        return (usesIsNull && matches.isEmpty()) || processInformedMatches(matches) != null  ? "": null;
     }
 
     @Override
-    public void reset() {
-        super.reset();
-        foundRequiredValue = false;
+    public boolean notValid(Collection<Match> matches) {
+        return !usesIsNull && matches.isEmpty();
     }
 
     @Override
     public String toString() {
-        return "Require: " + getMatchExpression();
+        return "Require: " + matchExpression;
     }
-
 }
-
-
-

@@ -46,9 +46,10 @@ public class UserAgentDissector extends Dissector {
     @Override
     public boolean initializeFromSettingsParameter(String s) {
         if (userAgentAnalyzer == null) {
-            userAgentAnalyzer = new UserAgentAnalyzer();
             if (s != null && !(s.trim().isEmpty())) {
-                userAgentAnalyzer.loadResources(s);
+                userAgentAnalyzer = new UserAgentAnalyzer(s, true);
+            } else {
+                userAgentAnalyzer = new UserAgentAnalyzer();
             }
         }
         return true;

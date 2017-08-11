@@ -57,8 +57,8 @@ import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepStartsWith
 import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepUpContext;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.tree.ParseTree;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -69,27 +69,22 @@ import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.Matcher
 import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepWordRangeContext;
 
 public class WalkList implements Serializable {
-    private static final Logger LOG = LoggerFactory.getLogger(WalkList.class);
+    private static final Logger LOG = LogManager.getLogger(WalkList.class);
 
-    private final Map<String, Map<String, String>> lookups;
     private final List<Step> steps = new ArrayList<>();
 
-    private final boolean verbose;
-
-    public WalkList(ParserRuleContext requiredPattern, Map<String, Map<String, String>> lookups, boolean verbose) {
-        this.lookups = lookups;
-        this.verbose = verbose;
+    public WalkList(ParserRuleContext requiredPattern, Map<String, Map<String, String>> lookups) {
         // Generate the walkList from the requiredPattern
-        new WalkListBuilder().visit(requiredPattern);
+        new WalkListBuilder(lookups).visit(requiredPattern);
         linkSteps();
 
         int i = 1;
-        if (verbose) {
-            LOG.info("------------------------------------");
-            LOG.info("Required: " + requiredPattern.getText());
+        if(LOG.isDebugEnabled()) {
+            LOG.debug("------------------------------------");
+            LOG.debug("Required: " + requiredPattern.getText());
             for (Step step : steps) {
                 step.setVerbose(true);
-                LOG.info("{}: {}", i++, step);
+                LOG.debug("{}: {}", i++, step);
             }
         }
     }
@@ -106,17 +101,15 @@ public class WalkList implements Serializable {
     public String walk(ParseTree tree, String value) {
         if (steps.isEmpty()) {
             return value;
-//            return GetResultValueVisitor.getResultValue(tree);
         }
         Step firstStep = steps.get(0);
-        if (verbose) {
-            Step.LOG.info("Tree: >>>{}<<<", tree.getText());
-            Step.LOG.info("Enter step: {}", firstStep);
-        }
+        if(!LOG.isDebugEnabled())
+            return firstStep.walk(tree, value);
+
+        Step.LOG.debug("Tree: >>>{}<<<", tree.getText());
+        Step.LOG.debug("Enter step: {}", firstStep);
         String result = firstStep.walk(tree, value);
-        if (verbose) {
-            Step.LOG.info("Leave step ({}): {}", result == null ? "-" : "+", firstStep);
-        }
+        Step.LOG.debug("Leave step ({}): {}", result == null ? "-" : "+", firstStep);
         return result;
     }
 
@@ -124,21 +117,12 @@ public class WalkList implements Serializable {
         return steps == null || steps.isEmpty() ? null : steps.get(0);
     }
 
-    private Boolean usesIsNull = null;
     public boolean usesIsNull() {
-        if (usesIsNull != null) {
-            return usesIsNull;
-        }
-
-        Step step = getFirstStep();
-        while (step != null) {
+        for (Step step = getFirstStep(); step != null; step = step.getNextStep()) {
             if (step instanceof StepIsNull) {
-                usesIsNull = true;
                 return true;
             }
-            step = step.getNextStep();
         }
-        usesIsNull = false;
         return false;
     }
 
@@ -155,9 +139,14 @@ public class WalkList implements Serializable {
     }
 
     private class WalkListBuilder extends UserAgentTreeWalkerBaseVisitor<Void> {
-
+        private final Map<String, Map<String, String>> lookups;
         // Because we are jumping in 'mid way' we need to skip creating steps until that point.
         boolean foundHashEntryPoint = false;
+
+        public WalkListBuilder(Map<String, Map<String, String>> lookups) {
+            super();
+            this.lookups = lookups;
+        }
 
         private void fromHereItCannotBeInHashMapAnymore() {
             foundHashEntryPoint = true;
