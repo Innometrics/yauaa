@@ -18,19 +18,19 @@
 package nl.basjes.parse.useragent.parse;
 
 import nl.basjes.parse.useragent.UserAgent;
-import nl.basjes.parse.useragent.UserAgentAnalyzer;
-import nl.basjes.parse.useragent.UserAgentAnalyzer.GetAllPathsAnalyzer;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.List;
+import java.util.ArrayDeque;
+import java.util.Collection;
+import java.util.Collections;
 
 import static org.junit.Assert.fail;
 
 public class TestUserAgentFlattening {
 
-    private final Logger LOG = LoggerFactory.getLogger(TestUserAgentFlattening.class);
+    private final Logger LOG = LogManager.getLogger(TestUserAgentFlattening.class);
 
     @Test
     public void testFlatteningProduct() throws Exception {
@@ -1355,8 +1355,12 @@ public class TestUserAgentFlattening {
         sb.append("| ").append(useragent).append('\n');
         sb.append("|-------------------------------------- \n");
 
-        GetAllPathsAnalyzer analyzer = UserAgentAnalyzer.getAllPathsAnalyzer(useragent);
-        UserAgent parsedUseragent = analyzer.getResult();
+        final Collection<String> paths = new ArrayDeque<>(128);
+        UserAgent parsedUseragent = new UserAgent(useragent);
+        UserAgentTreeFlattener.parse(parsedUseragent, Collections.emptyMap(), (path, value, ctx) -> {
+            paths.add(path);
+            paths.add(path + "=\"" + value + "\"");
+        });
 
         if (parsedUseragent.hasAmbiguity()) {
             sb.append("| Ambiguity \n");
@@ -1364,8 +1368,6 @@ public class TestUserAgentFlattening {
         if (parsedUseragent.hasSyntaxError()) {
             sb.append("| Syntax Error \n");
         }
-
-        List<String> paths = analyzer.getValues();
 
         boolean ok = true;
         for (String value : requiredValues) {

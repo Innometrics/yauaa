@@ -120,12 +120,9 @@ public class TestErrorHandling {
         UserAgentAnalyzer uaa = UserAgentAnalyzer.newBuilder()
             .build();
 
-        UserAgent agent = uaa.parse((String)null);
+        UserAgent agent = uaa.parse(null);
         assertNotNull(agent);
         assertNull(agent.getUserAgentString());
-
-        agent = uaa.parse((UserAgent) null);
-        assertNull(agent);
 
         assertNull(EvilManualUseragentStringHacks.fixIt(null));
     }

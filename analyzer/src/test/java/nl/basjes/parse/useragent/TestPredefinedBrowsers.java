@@ -18,10 +18,10 @@
 package nl.basjes.parse.useragent;
 
 import nl.basjes.parse.useragent.debug.UserAgentAnalyzerTester;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -32,15 +32,13 @@ import static org.junit.Assert.assertTrue;
 
 public class TestPredefinedBrowsers {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TestPredefinedBrowsers.class);
+    private static final Logger LOG = LogManager.getLogger(TestPredefinedBrowsers.class);
 
     protected static UserAgentAnalyzerTester uaa;
 
     @BeforeClass
     public static void getListOfAllFields() {
-        uaa = new UserAgentAnalyzerTester();
-        uaa.setShowMatcherStats(false);
-        uaa.initialize();
+        uaa = new UserAgentAnalyzerTester(false);
     }
 
     @Test
@@ -82,6 +80,4 @@ public class TestPredefinedBrowsers {
         fields.add("OperatingSystemVersionBuild");
         validateAllPredefinedBrowsersMultipleFields(fields);
     }
-
-
 }

@@ -19,22 +19,25 @@ package nl.basjes.parse.useragent.commandline;
 
 import nl.basjes.parse.useragent.UserAgent;
 import nl.basjes.parse.useragent.UserAgentAnalyzer;
-import nl.basjes.parse.useragent.analyze.MatchesList.Match;
-import nl.basjes.parse.useragent.debug.FlattenPrinter;
-import nl.basjes.parse.useragent.debug.UserAgentAnalyzerTester;
 import nl.basjes.parse.useragent.parse.UserAgentTreeFlattener;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.config.AppenderRef;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.Option;
 import org.kohsuke.args4j.spi.StringArrayOptionHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.util.Collections;
 import java.util.List;
 
 import static nl.basjes.parse.useragent.UserAgent.USERAGENT;
@@ -43,10 +46,30 @@ import static nl.basjes.parse.useragent.commandline.Main.OutputFormat.JSON;
 import static nl.basjes.parse.useragent.commandline.Main.OutputFormat.YAML;
 
 public final class Main {
+    private static final LoggerConfig VERBOSE_LOGGER = createVerboseLogger();
+
+    private static LoggerConfig createVerboseLogger() {
+        Configuration config = LoggerContext.getContext(false).getConfiguration();
+        List<AppenderRef> rootRefs = config.getRootLogger().getAppenderRefs();
+        AppenderRef[] refs = new AppenderRef[rootRefs.size()];
+        int i = 0;
+        for (AppenderRef rootRef : rootRefs) {
+            refs[i++] = AppenderRef.createAppenderRef(rootRef.getRef(), null, null);
+        }
+
+        LoggerConfig loggerConfig = LoggerConfig.createLogger(false, Level.DEBUG,
+            "nl.basjes.parse.useragent", "true", refs, null, config, null);
+        for (AppenderRef ref : refs) {
+            loggerConfig.addAppender(config.getAppender(ref.getRef()), null, null);
+        }
+        return loggerConfig;
+    }
+
+
     private Main() {
     }
 
-    private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+    private static final Logger LOG = LogManager.getLogger(Main.class);
 
     enum OutputFormat {
         CSV, JSON, YAML
@@ -98,6 +121,20 @@ public final class Main {
         }
     }
 
+    public static void setVerbose(boolean enable) {
+        LoggerContext loggerContext = LoggerContext.getContext(false);
+        Configuration config = loggerContext.getConfiguration();
+        if (enable == config.getLoggers().containsKey(VERBOSE_LOGGER.getName())) {
+            return;
+        }
+        if (enable) {
+            config.addLogger(VERBOSE_LOGGER.getName(), VERBOSE_LOGGER);
+        } else {
+            config.removeLogger(VERBOSE_LOGGER.getName());
+        }
+    }
+
+
     @SuppressWarnings("deprecation")
     public static void main(String[] args) throws IOException {
         int returnValue = 0;
@@ -119,18 +156,8 @@ public final class Main {
                 }
             }
 
-            UserAgentAnalyzerTester.Builder builder = UserAgentAnalyzerTester.newBuilder();
-            builder.hideMatcherLoadStats();
-            builder.withCache(commandlineOptions.cacheSize);
-            if (commandlineOptions.fields != null) {
-                for (String field: commandlineOptions.fields) {
-                    builder.withField(field);
-                }
-            }
-            UserAgentAnalyzerTester uaa = builder.build();
-
-//            uaa.setVerbose(commandlineOptions.debug);
-            UserAgentTreeFlattener flattenPrinter = new UserAgentTreeFlattener(new FlattenPrinter(System.out));
+            UserAgentAnalyzer uaa = new UserAgentAnalyzer("classpath*:UserAgents/**/*.yaml", commandlineOptions.fields, false);
+            setVerbose(commandlineOptions.debug);
 
             List<String> fields;
             if (commandlineOptions.fields == null) {
@@ -191,17 +218,17 @@ public final class Main {
                 }
 
                 if (commandlineOptions.fullFlatten) {
-                    flattenPrinter.parse(agentStr);
+                    UserAgentTreeFlattener.parse(new UserAgent(agentStr), Collections.emptyMap(), (path, value, tree) -> System.out.println(path));
                     continue;
                 }
-
+/* TODO: Remove or reimplement
                 if (commandlineOptions.matchedFlatten) {
                     for (Match match : uaa.getUsedMatches(new UserAgent(agentStr))) {
                         System.out.println(match.getKey() + " " + match.getValue());
                     }
                     continue;
                 }
-
+*/
                 UserAgent agent = uaa.parse(agentStr);
 
                 boolean hasBad = false;
@@ -342,6 +369,4 @@ public final class Main {
         private boolean matchedFlatten = false;
 
     }
-
-
 }

@@ -17,118 +17,91 @@
 
 package nl.basjes.parse.useragent;
 
-import nl.basjes.parse.useragent.analyze.Analyzer;
 import nl.basjes.parse.useragent.analyze.InvalidParserConfigurationException;
 import nl.basjes.parse.useragent.analyze.Matcher;
 import nl.basjes.parse.useragent.analyze.MatcherAction;
-import nl.basjes.parse.useragent.analyze.UselessMatcherException;
 import nl.basjes.parse.useragent.analyze.WordRangeVisitor.Range;
 import nl.basjes.parse.useragent.parse.UserAgentTreeFlattener;
-import nl.basjes.parse.useragent.utils.Normalize;
-import nl.basjes.parse.useragent.utils.VersionSplitter;
-import nl.basjes.parse.useragent.utils.YamlUtils;
-import org.antlr.v4.runtime.tree.ParseTree;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.nodes.MappingNode;
-import org.yaml.snakeyaml.nodes.Node;
-import org.yaml.snakeyaml.nodes.NodeTuple;
-import org.yaml.snakeyaml.nodes.SequenceNode;
-import org.yaml.snakeyaml.reader.UnicodeReader;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.Serializable;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Formatter;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Function;
 
-import static nl.basjes.parse.useragent.UserAgent.AGENT_CLASS;
 import static nl.basjes.parse.useragent.UserAgent.AGENT_NAME;
 import static nl.basjes.parse.useragent.UserAgent.AGENT_VERSION;
 import static nl.basjes.parse.useragent.UserAgent.AGENT_VERSION_MAJOR;
 import static nl.basjes.parse.useragent.UserAgent.DEVICE_BRAND;
-import static nl.basjes.parse.useragent.UserAgent.DEVICE_CLASS;
 import static nl.basjes.parse.useragent.UserAgent.DEVICE_NAME;
-import static nl.basjes.parse.useragent.UserAgent.DEVICE_VERSION;
-import static nl.basjes.parse.useragent.UserAgent.LAYOUT_ENGINE_CLASS;
 import static nl.basjes.parse.useragent.UserAgent.LAYOUT_ENGINE_NAME;
 import static nl.basjes.parse.useragent.UserAgent.LAYOUT_ENGINE_VERSION;
 import static nl.basjes.parse.useragent.UserAgent.LAYOUT_ENGINE_VERSION_MAJOR;
-import static nl.basjes.parse.useragent.UserAgent.OPERATING_SYSTEM_CLASS;
 import static nl.basjes.parse.useragent.UserAgent.OPERATING_SYSTEM_NAME;
 import static nl.basjes.parse.useragent.UserAgent.OPERATING_SYSTEM_VERSION;
 import static nl.basjes.parse.useragent.UserAgent.PRE_SORTED_FIELDS_LIST;
 import static nl.basjes.parse.useragent.UserAgent.SET_ALL_FIELDS;
 import static nl.basjes.parse.useragent.UserAgent.SYNTAX_ERROR;
-import static nl.basjes.parse.useragent.utils.YamlUtils.fail;
-import static nl.basjes.parse.useragent.utils.YamlUtils.getExactlyOneNodeTuple;
-import static nl.basjes.parse.useragent.utils.YamlUtils.getKeyAsString;
-import static nl.basjes.parse.useragent.utils.YamlUtils.getValueAsMappingNode;
-import static nl.basjes.parse.useragent.utils.YamlUtils.getValueAsSequenceNode;
-import static nl.basjes.parse.useragent.utils.YamlUtils.getValueAsString;
+import static nl.basjes.parse.useragent.UserAgent.USERAGENT;
 
-public class UserAgentAnalyzer extends Analyzer implements Serializable {
+public class UserAgentAnalyzer implements Serializable {
+    private static final Logger LOG = LogManager.getLogger(UserAgentAnalyzer.class);
+    private static final List<String> HARD_CODED_GENERATED_FIELDS = Arrays.asList(
+        SYNTAX_ERROR,
+        AGENT_VERSION_MAJOR,
+        LAYOUT_ENGINE_VERSION_MAJOR,
+        "AgentNameVersion",
+        "AgentNameVersionMajor",
+        "LayoutEngineNameVersion",
+        "LayoutEngineNameVersionMajor",
+        "OperatingSystemNameVersion",
+        "WebviewAppVersionMajor",
+        "WebviewAppNameVersionMajor"
+    );
 
-    private static final int INFORM_ACTIONS_HASHMAP_SIZE = 300000;
+    private final Map<String, Collection<MatcherAction>> informMatcherActions;
+    // These are the actual subrange we need for the paths.
+    private final Map<String, Set<Range>> informMatcherActionRanges;
 
-    private static final Logger LOG = LoggerFactory.getLogger(UserAgentAnalyzer.class);
-    protected List<Matcher> allMatchers = new ArrayList<>(5000);
-    private Map<String, Set<MatcherAction>> informMatcherActions = new HashMap<>(INFORM_ACTIONS_HASHMAP_SIZE);
-    private transient Map<String, List<MappingNode>> matcherConfigs = new HashMap<>();
-
-    private boolean showMatcherStats = false;
-    private boolean doingOnlyASingleTest = false;
-
-    // If we want ALL fields this is null. If we only want specific fields this is a list of names.
-    protected List<String> wantedFieldNames = null;
-
-    protected final List<Map<String, Map<String, String>>> testCases = new ArrayList<>(2048);
-    private Map<String, Map<String, String>> lookups = new HashMap<>(128);
-
-    protected UserAgentTreeFlattener flattener;
-
-    private Yaml yaml;
+    final boolean addUserAgentStr;
+    final boolean canDetectHacker;
+    final Matcher[] matchers;
 
     public UserAgentAnalyzer() {
-        this(true);
+        this("classpath*:UserAgents/**/*.yaml", true);
     }
 
-    protected UserAgentAnalyzer(boolean initialize) {
-        if (initialize) {
-            initialize();
-        }
+    public UserAgentAnalyzer(String resourceString, boolean showMatcherStats) {
+        this(resourceString, null, showMatcherStats);
     }
 
-    public UserAgentAnalyzer(String resourceString) {
-        setShowMatcherStats(true);
-        loadResources(resourceString);
-    }
-
-    public UserAgentAnalyzer setShowMatcherStats(boolean newShowMatcherStats) {
-        this.showMatcherStats = newShowMatcherStats;
-        return this;
-    }
-
-    protected void initialize() {
+    public UserAgentAnalyzer(String resourceString, List<String> wantedFields, boolean showMatcherStats) {
         logVersion();
-        loadResources("classpath*:UserAgents/**/*.yaml");
-        verifyWeAreNotAskingForImpossibleFields();
+        ResourceLoader loader= load(resourceString, wantedFields, showMatcherStats);
+        informMatcherActions = loader.actions.informMatcherActions;
+        informMatcherActionRanges = loader.actions.informMatcherActionRanges;
+        matchers = loader.allMatchers.toArray(new Matcher[loader.allMatchers.size()]);
+        canDetectHacker = loader.canDetectHacker;
+        addUserAgentStr = wantedFields != null && wantedFields.contains(USERAGENT);
+
+        verifyWeAreNotAskingForImpossibleFields(wantedFields);
     }
 
-    protected void verifyWeAreNotAskingForImpossibleFields() {
+    protected ResourceLoader load(String resourceString, List<String> wantedFields, boolean showMatcherStats) {
+        return new ResourceLoader(resourceString, wantedFields, showMatcherStats);
+    }
+
+    private void verifyWeAreNotAskingForImpossibleFields(List<String> wantedFieldNames) {
         if (wantedFieldNames == null) {
             return; // Nothing to check
         }
@@ -201,131 +174,10 @@ public class UserAgentAnalyzer extends Analyzer implements Serializable {
         return "Yauaa " + Version.getProjectVersion() + " (" + Version.getGitCommitIdDescribeShort() + " @ " + Version.getBuildTimestamp() + ")";
     }
 
-    public void loadResources(String resourceString) {
-        LOG.info("Loading from: \"{}\"", resourceString);
-
-        flattener = new UserAgentTreeFlattener(this);
-        Yaml yaml = new Yaml();
-
-        Map<String, Resource> resources = new TreeMap<>();
-        PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-        try {
-            Resource[] resourceArray = resolver.getResources(resourceString);
-            for (Resource resource : resourceArray) {
-                resources.put(resource.getFilename(), resource);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-            return;
-        }
-        doingOnlyASingleTest = false;
-        int maxFilenameLength = 0;
-
-        if (resources.isEmpty()) {
-            throw new InvalidParserConfigurationException("Unable to find ANY config files");
-        }
-
-        for (Map.Entry<String, Resource> resourceEntry : resources.entrySet()) {
-            try {
-                Resource resource = resourceEntry.getValue();
-                String filename = resource.getFilename();
-                maxFilenameLength = Math.max(maxFilenameLength, filename.length());
-                loadResource(yaml, resource.getInputStream(), filename);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        LOG.info("Loaded {} files", resources.size());
-
-        if (lookups != null && !lookups.isEmpty()) {
-            // All compares are done in a case insensitive way. So we lowercase ALL keys of the lookups beforehand.
-            Map<String, Map<String, String>> cleanedLookups = new HashMap<>(lookups.size());
-            for (Map.Entry<String, Map<String, String>> lookupsEntry : lookups.entrySet()) {
-                Map<String, String> cleanedLookup = new HashMap<>(lookupsEntry.getValue().size());
-                for (Map.Entry<String, String> entry : lookupsEntry.getValue().entrySet()) {
-                    cleanedLookup.put(entry.getKey().toLowerCase(), entry.getValue());
-                }
-                cleanedLookups.put(lookupsEntry.getKey(), cleanedLookup);
-            }
-            lookups = cleanedLookups;
-        }
-
-        LOG.info("Building all matchers");
-        int totalNumberOfMatchers = 0;
-        int skippedMatchers = 0;
-        if (matcherConfigs != null) {
-            long fullStart = System.nanoTime();
-            for (Map.Entry<String, Resource> resourceEntry : resources.entrySet()) {
-                Resource resource = resourceEntry.getValue();
-                String configFilename = resource.getFilename();
-                List<MappingNode> matcherConfig = matcherConfigs.get(configFilename);
-                if (matcherConfig == null) {
-                    continue; // No matchers in this file (probably only lookups and/or tests)
-                }
-
-                long start = System.nanoTime();
-                int startSize = informMatcherActions.size();
-                int startSkipped = skippedMatchers;
-                for (MappingNode map : matcherConfig) {
-                    try {
-                        allMatchers.add(new Matcher(this, lookups, wantedFieldNames, map, configFilename));
-                        totalNumberOfMatchers++;
-                    } catch (UselessMatcherException ume) {
-                        skippedMatchers++;
-                    }
-                }
-                long stop = System.nanoTime();
-                int stopSize = informMatcherActions.size();
-                int stopSkipped = skippedMatchers;
-
-                if (showMatcherStats) {
-                    Formatter msg = new Formatter(Locale.ENGLISH);
-                    msg.format("Building %4d (dropped %4d) matchers from %-" + maxFilenameLength + "s " +
-                            "took %5d msec resulted in %8d extra hashmap entries",
-                        matcherConfig.size(),
-                        stopSkipped - startSkipped,
-                        configFilename,
-                        (stop - start) / 1000000,
-                        stopSize - startSize);
-                    LOG.info(msg.toString());
-                }
-            }
-            long fullStop = System.nanoTime();
-
-            Formatter msg = new Formatter(Locale.ENGLISH);
-            msg.format("Building %4d (dropped %4d) matchers from %4d files took %5d msec resulted in %8d hashmap entries",
-                totalNumberOfMatchers,
-                skippedMatchers,
-                matcherConfigs.size(),
-                (fullStop - fullStart) / 1000000,
-                informMatcherActions.size());
-            LOG.info(msg.toString());
-
-        }
-        LOG.info("Analyzer stats");
-        LOG.info("Lookups         : {}", (lookups == null) ? 0 : lookups.size());
-        LOG.info("Matchers        : {} (total:{} ; dropped: {})", allMatchers.size(), totalNumberOfMatchers, skippedMatchers);
-        LOG.info("Hashmap size    : {}", informMatcherActions.size());
-        LOG.info("Ranges map size : {}", informMatcherActionRanges.size());
-        LOG.info("Testcases       : {}", testCases.size());
-//        LOG.info("All possible field names:");
-//        int count = 1;
-//        for (String fieldName : getAllPossibleFieldNames()) {
-//            LOG.info("- {}: {}", count++, fieldName);
-//        }
-    }
-
-    /**
-     * Used by some unit tests to get rid of all the standard tests and focus on the experiment at hand.
-     */
-    public void eraseTestCases() {
-        testCases.clear();
-    }
-
-    public Set<String> getAllPossibleFieldNames() {
+    Set<String> getAllPossibleFieldNames() {
         Set<String> results = new TreeSet<>();
         results.addAll(HARD_CODED_GENERATED_FIELDS);
-        for (Matcher matcher : allMatchers) {
+        for (Matcher matcher : matchers) {
             results.addAll(matcher.getAllPossibleFieldNames());
         }
         return results;
@@ -344,7 +196,6 @@ public class UserAgentAnalyzer extends Analyzer implements Serializable {
 
         return result;
     }
-
 
 /*
 Example of the structure of the yaml file:
@@ -376,508 +227,51 @@ config:
 ----------------------------
 */
 
-    private void loadResource(Yaml yaml, InputStream yamlStream, String filename) {
-        Node loadedYaml = yaml.compose(new UnicodeReader(yamlStream));
 
-        if (loadedYaml == null) {
-            throw new InvalidParserConfigurationException("The file " + filename + " is empty");
-        }
-
-        // Get and check top level config
-        if (!(loadedYaml instanceof MappingNode)) {
-            fail(loadedYaml, filename, "File must be a Map");
-        }
-
-        MappingNode rootNode = (MappingNode) loadedYaml;
-
-        NodeTuple configNodeTuple = null;
-        for (NodeTuple tuple : rootNode.getValue()) {
-            String name = getKeyAsString(tuple, filename);
-            if ("config".equals(name)) {
-                configNodeTuple = tuple;
-                break;
-            }
-        }
-
-        if (configNodeTuple == null) {
-            fail(loadedYaml, filename, "The top level entry MUST be 'config'.");
-        }
-
-        SequenceNode configNode = getValueAsSequenceNode(configNodeTuple, filename);
-        List<Node> configList = configNode.getValue();
-
-        for (Node configEntry : configList) {
-            if (!(configEntry instanceof MappingNode)) {
-                fail(loadedYaml, filename, "The entry MUST be a mapping");
-            }
-
-            NodeTuple entry = getExactlyOneNodeTuple((MappingNode) configEntry, filename);
-            MappingNode actualEntry = getValueAsMappingNode(entry, filename);
-            String entryType = getKeyAsString(entry, filename);
-            switch (entryType) {
-                case "lookup":
-                    loadYamlLookup(actualEntry, filename);
-                    break;
-                case "matcher":
-                    loadYamlMatcher(actualEntry, filename);
-                    break;
-                case "test":
-                    loadYamlTestcase(actualEntry, filename);
-                    break;
-                default:
-                    throw new InvalidParserConfigurationException(
-                        "Yaml config.(" + filename + ":" + actualEntry.getStartMark().getLine() + "): " +
-                            "Found unexpected config entry: " + entryType + ", allowed are 'lookup, 'matcher' and 'test'");
-            }
-        }
+    protected UserAgent createUserAgent(String userAgentString) {
+        return new UserAgent((userAgentString));
     }
 
-    private void loadYamlLookup(MappingNode entry, String filename) {
-//        LOG.info("Loading lookup.({}:{})", filename, entry.getStartMark().getLine());
-        String name = null;
-        Map<String, String> map = null;
+    protected final Map<MatcherAction, Collection<MatcherAction.Match>> _matches(UserAgent userAgent) {
+        Map<MatcherAction, Collection<MatcherAction.Match>> matches = new HashMap<>();
+        UserAgentTreeFlattener.parse(userAgent, informMatcherActionRanges, (path, value, ctx) -> {
+            MatcherAction.Match match = new MatcherAction.Match(path, value, ctx);
+            String lpath = path.toLowerCase(Locale.ENGLISH);
+            informMatcherActions.getOrDefault(lpath, Collections.emptySet()).forEach(
+                action -> matches.computeIfAbsent(action, k -> new ArrayDeque<>()).add(match)
+            );
 
-        for (NodeTuple tuple : entry.getValue()) {
-            switch (getKeyAsString(tuple, filename)) {
-                case "name":
-                    name = getValueAsString(tuple, filename);
-                    break;
-                case "map":
-                    if (map == null) {
-                        map = new HashMap<>();
-                    }
-                    List<NodeTuple> mappings = getValueAsMappingNode(tuple, filename).getValue();
-                    for (NodeTuple mapping : mappings) {
-                        String key = getKeyAsString(mapping, filename);
-                        String value = getValueAsString(mapping, filename);
-                        map.put(key, value);
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        if (name == null && map == null) {
-            fail(entry, filename, "Invalid lookup specified");
-        }
-
-        lookups.put(name, map);
+            lpath += "=\"" + (value == null ? null : value.toLowerCase(Locale.ENGLISH)) + '"';
+            informMatcherActions.getOrDefault(lpath, Collections.emptySet()).forEach(
+                action -> matches.computeIfAbsent(action, k -> new ArrayDeque<>()).add(match)
+            );
+        });
+        return matches;
     }
 
-    private void loadYamlMatcher(MappingNode entry, String filename) {
-//        LOG.info("Loading matcher.({}:{})", filename, entry.getStartMark().getLine());
-        List<MappingNode> matcherConfigList = matcherConfigs
-            .computeIfAbsent(filename, k -> new ArrayList<>(32));
-        matcherConfigList.add(entry);
-    }
-
-    private void loadYamlTestcase(MappingNode entry, String filename) {
-        if (!doingOnlyASingleTest) {
-//            LOG.info("Skipping testcase.({}:{})", filename, entry.getStartMark().getLine());
-//        } else {
-//            LOG.info("Loading testcase.({}:{})", filename, entry.getStartMark().getLine());
-
-            Map<String, String> metaData = new HashMap<>();
-            metaData.put("filename", filename);
-            metaData.put("fileline", String.valueOf(entry.getStartMark().getLine()));
-
-            Map<String, String> input = null;
-            List<String> options = null;
-            Map<String, String> expected = null;
-            for (NodeTuple tuple : entry.getValue()) {
-                String name = getKeyAsString(tuple, filename);
-                switch (name) {
-                    case "options":
-                        options = YamlUtils.getStringValues(tuple.getValueNode(), filename);
-                        if (options != null) {
-                            if (options.contains("only")) {
-                                doingOnlyASingleTest = true;
-                                testCases.clear();
-                            }
-                        }
-                        break;
-                    case "input":
-                        for (NodeTuple inputTuple : getValueAsMappingNode(tuple, filename).getValue()) {
-                            String inputName = getKeyAsString(inputTuple, filename);
-                            switch (inputName) {
-                                case "user_agent_string":
-                                    String inputString = getValueAsString(inputTuple, filename);
-                                    input = new HashMap<>();
-                                    input.put(inputName, inputString);
-                                    break;
-                                default:
-                                    break;
-                            }
-                        }
-                        break;
-                    case "expected":
-                        List<NodeTuple> mappings = getValueAsMappingNode(tuple, filename).getValue();
-                        if (mappings != null) {
-                            if (expected == null) {
-                                expected = new HashMap<>();
-                            }
-                            for (NodeTuple mapping : mappings) {
-                                String key = getKeyAsString(mapping, filename);
-                                String value = getValueAsString(mapping, filename);
-                                expected.put(key, value);
-                            }
-                        }
-                        break;
-                    default:
-//                        fail(tuple.getKeyNode(), filename, "Unexpected: " + name);
-                        break; // Skip
-                }
-            }
-
-            if (input == null) {
-                fail(entry, filename, "Test is missing input");
-            }
-
-            if (expected == null || expected.isEmpty()) {
-                doingOnlyASingleTest = true;
-                testCases.clear();
-            }
-
-            Map<String, Map<String, String>> testCase = new HashMap<>();
-
-            testCase.put("input", input);
-            if (expected != null) {
-                testCase.put("expected", expected);
-            }
-            if (options != null) {
-                Map<String, String> optionsMap = new HashMap<>(options.size());
-                for (String option: options) {
-                    optionsMap.put(option, option);
-                }
-                testCase.put("options", optionsMap);
-            }
-            testCase.put("metaData", metaData);
-            testCases.add(testCase);
-        }
-
-    }
-
-    // These are the actual subrange we need for the paths.
-    private final Map<String, Set<Range>> informMatcherActionRanges = new HashMap<>(10000); // FIXME: Determine optimal hashmap size
-    @Override
-    public void lookingForRange(String treeName, Range range) {
-        Set<Range> ranges = informMatcherActionRanges.computeIfAbsent(treeName, k -> new HashSet<>(4));
-        ranges.add(range);
-    }
-
-    public void informMeAbout(MatcherAction matcherAction, String keyPattern) {
-        String hashKey = keyPattern.toLowerCase();
-        Set<MatcherAction> analyzerSet = informMatcherActions
-            .computeIfAbsent(hashKey, k -> new HashSet<>());
-        analyzerSet.add(matcherAction);
-    }
-
-    private boolean verbose = false;
-
-    public void setVerbose(boolean newVerbose) {
-        this.verbose = newVerbose;
-        flattener.setVerbose(newVerbose);
+    protected final void _parse(UserAgent userAgent, Map<MatcherAction, Collection<MatcherAction.Match>> matches) {
+        Arrays.stream(matchers).forEach( matcher -> matcher.analyze(userAgent.withMatcher(matcher), matches));
+        // Fire all Analyzers
+        userAgent.processSetAll();
+        userAgent.hardCodedPostProcessing(addUserAgentStr, canDetectHacker);
     }
 
     public UserAgent parse(String userAgentString) {
-        UserAgent userAgent = new UserAgent(userAgentString);
-        return parse(userAgent);
-    }
-
-    public UserAgent parse(UserAgent userAgent) {
-        if (userAgent == null) {
-            return null;
-        }
-        userAgent.reset();
-
-        boolean setVerboseTemporarily = userAgent.isDebug();
-
-        // Reset all Matchers
-        for (Matcher matcher : allMatchers) {
-            matcher.reset();
-        }
-
-        if (userAgent.isDebug()) {
-            for (Matcher matcher : allMatchers) {
-                matcher.setVerboseTemporarily(false);
-            }
-        }
-
-        userAgent = flattener.parse(userAgent);
-
-        // Fire all Analyzers
-        for (Matcher matcher : allMatchers) {
-            matcher.analyze(userAgent);
-        }
-
-        userAgent.processSetAll();
-        return hardCodedPostProcessing(userAgent);
-    }
-
-    private static final List<String> HARD_CODED_GENERATED_FIELDS = new ArrayList<>();
-
-    static {
-        HARD_CODED_GENERATED_FIELDS.add(SYNTAX_ERROR);
-        HARD_CODED_GENERATED_FIELDS.add(AGENT_VERSION_MAJOR);
-        HARD_CODED_GENERATED_FIELDS.add(LAYOUT_ENGINE_VERSION_MAJOR);
-        HARD_CODED_GENERATED_FIELDS.add("AgentNameVersion");
-        HARD_CODED_GENERATED_FIELDS.add("AgentNameVersionMajor");
-        HARD_CODED_GENERATED_FIELDS.add("LayoutEngineNameVersion");
-        HARD_CODED_GENERATED_FIELDS.add("LayoutEngineNameVersionMajor");
-        HARD_CODED_GENERATED_FIELDS.add("OperatingSystemNameVersion");
-        HARD_CODED_GENERATED_FIELDS.add("WebviewAppVersionMajor");
-        HARD_CODED_GENERATED_FIELDS.add("WebviewAppNameVersionMajor");
-    }
-
-    private UserAgent hardCodedPostProcessing(UserAgent userAgent) {
-        // If it is really really bad ... then it is a Hacker.
-        if ("true".equals(userAgent.getValue(SYNTAX_ERROR))) {
-            if (wantedFieldNames == null ||
-                wantedFieldNames.contains(DEVICE_CLASS) ||
-                wantedFieldNames.contains(OPERATING_SYSTEM_CLASS) ||
-                wantedFieldNames.contains(LAYOUT_ENGINE_CLASS)
-                ) {
-                if (userAgent.get(DEVICE_CLASS).getConfidence() == -1 &&
-                    userAgent.get(OPERATING_SYSTEM_CLASS).getConfidence() == -1 &&
-                    userAgent.get(LAYOUT_ENGINE_CLASS).getConfidence() == -1) {
-
-                    userAgent.set(DEVICE_CLASS, "Hacker", 10);
-                    userAgent.set(DEVICE_BRAND, "Hacker", 10);
-                    userAgent.set(DEVICE_NAME, "Hacker", 10);
-                    userAgent.set(DEVICE_VERSION, "Hacker", 10);
-                    userAgent.set(OPERATING_SYSTEM_CLASS, "Hacker", 10);
-                    userAgent.set(OPERATING_SYSTEM_NAME, "Hacker", 10);
-                    userAgent.set(OPERATING_SYSTEM_VERSION, "Hacker", 10);
-                    userAgent.set(LAYOUT_ENGINE_CLASS, "Hacker", 10);
-                    userAgent.set(LAYOUT_ENGINE_NAME, "Hacker", 10);
-                    userAgent.set(LAYOUT_ENGINE_VERSION, "Hacker", 10);
-                    userAgent.set(LAYOUT_ENGINE_VERSION_MAJOR, "Hacker", 10);
-                    userAgent.set(AGENT_CLASS, "Hacker", 10);
-                    userAgent.set(AGENT_NAME, "Hacker", 10);
-                    userAgent.set(AGENT_VERSION, "Hacker", 10);
-                    userAgent.set(AGENT_VERSION_MAJOR, "Hacker", 10);
-                    userAgent.set("HackerToolkit", "Unknown", 10);
-                    userAgent.set("HackerAttackVector", "Unknown", 10);
-                }
-            }
-        }
-
-        // !!!!!!!!!! NOTE !!!!!!!!!!!!
-        // IF YOU ADD ANY EXTRA FIELDS YOU MUST ADD THEM TO THE BUILDER TOO !!!!
-        // TODO: Perhaps this should be more generic. Like a "Post processor"  (Generic: Create fields from fields)?
-        addMajorVersionField(userAgent, AGENT_VERSION, AGENT_VERSION_MAJOR);
-        addMajorVersionField(userAgent, LAYOUT_ENGINE_VERSION, LAYOUT_ENGINE_VERSION_MAJOR);
-        addMajorVersionField(userAgent, "WebviewAppVersion", "WebviewAppVersionMajor");
-
-        concatFieldValuesNONDuplicated(userAgent, "AgentNameVersion",               AGENT_NAME,             AGENT_VERSION);
-        concatFieldValuesNONDuplicated(userAgent, "AgentNameVersionMajor",          AGENT_NAME,             AGENT_VERSION_MAJOR);
-        concatFieldValuesNONDuplicated(userAgent, "WebviewAppNameVersionMajor",     "WebviewAppName",       "WebviewAppVersionMajor");
-        concatFieldValuesNONDuplicated(userAgent, "LayoutEngineNameVersion",        LAYOUT_ENGINE_NAME,     LAYOUT_ENGINE_VERSION);
-        concatFieldValuesNONDuplicated(userAgent, "LayoutEngineNameVersionMajor",   LAYOUT_ENGINE_NAME,     LAYOUT_ENGINE_VERSION_MAJOR);
-        concatFieldValuesNONDuplicated(userAgent, "OperatingSystemNameVersion",     OPERATING_SYSTEM_NAME,  OPERATING_SYSTEM_VERSION);
-
-        // The device brand field is a mess.
-        UserAgent.AgentField deviceBrand = userAgent.get(DEVICE_BRAND);
-        if (deviceBrand.getConfidence() >= 0) {
-            userAgent.setForced(
-                DEVICE_BRAND,
-                Normalize.brand(deviceBrand.getValue()),
-                deviceBrand.getConfidence());
-        }
-
-        // The email address is a mess
-        UserAgent.AgentField email = userAgent.get("AgentInformationEmail");
-        if (email != null && email.getConfidence() >= 0) {
-            userAgent.setForced(
-                "AgentInformationEmail",
-                Normalize.email(email.getValue()),
-                email.getConfidence());
-        }
-
-        // Make sure the DeviceName always starts with the DeviceBrand
-        UserAgent.AgentField deviceName = userAgent.get(DEVICE_NAME);
-        if (deviceName.getConfidence() >= 0) {
-            deviceBrand = userAgent.get(DEVICE_BRAND);
-            String deviceNameValue = deviceName.getValue();
-            String deviceBrandValue = deviceBrand.getValue();
-            if (deviceName.getConfidence() >= 0 &&
-                deviceBrand.getConfidence() >= 0 &&
-                !deviceBrandValue.equals("Unknown")) {
-                // In some cases it does start with the brand but without a separator following the brand
-                deviceNameValue = Normalize.cleanupDeviceBrandName(deviceBrandValue, deviceNameValue);
-            } else {
-                deviceNameValue = Normalize.brand(deviceNameValue);
-            }
-
-            userAgent.setForced(
-                DEVICE_NAME,
-                deviceNameValue,
-                deviceName.getConfidence());
-        }
+        UserAgent userAgent = createUserAgent(userAgentString);
+        _parse(userAgent, _matches(userAgent));
         return userAgent;
-    }
-
-    private void concatFieldValuesNONDuplicated(UserAgent userAgent, String targetName, String firstName, String secondName) {
-        UserAgent.AgentField firstField = userAgent.get(firstName);
-        UserAgent.AgentField secondField = userAgent.get(secondName);
-
-        String first = null;
-        long firstConfidence = -1;
-        String second = null;
-        long secondConfidence = -1;
-
-        if (firstField != null) {
-            first = firstField.getValue();
-            firstConfidence = firstField.getConfidence();
-        }
-        if (secondField != null) {
-            second = secondField.getValue();
-            secondConfidence = secondField.getConfidence();
-        }
-
-        if (first == null && second == null) {
-            return; // Nothing to do
-        }
-
-        if (second == null) {
-            if (firstConfidence >= 0) {
-                userAgent.set(targetName, first, firstConfidence);
-                return;
-            }
-            return; // Nothing to do
-        } else {
-            if (first == null) {
-                if (secondConfidence >= 0) {
-                    userAgent.set(targetName, second, secondConfidence);
-                }
-                return;
-            }
-        }
-
-        if (first.equals(second)) {
-            userAgent.set(targetName, first, firstConfidence);
-        } else {
-            if (second.startsWith(first)) {
-                userAgent.set(targetName, second, secondConfidence);
-            } else {
-                userAgent.set(targetName, first + " " + second, Math.max(firstField.getConfidence(), secondField.getConfidence()));
-            }
-        }
-    }
-
-    private void addMajorVersionField(UserAgent userAgent, String versionName, String majorVersionName) {
-        UserAgent.AgentField agentVersionMajor = userAgent.get(majorVersionName);
-        if (agentVersionMajor == null || agentVersionMajor.getConfidence() == -1) {
-            UserAgent.AgentField agentVersion = userAgent.get(versionName);
-            if (agentVersion != null) {
-                userAgent.set(
-                    majorVersionName,
-                    VersionSplitter.getInstance().getSingleSplit(agentVersion.getValue(), 1),
-                    agentVersion.getConfidence());
-            }
-        }
-    }
-
-    public Set<Range> getRequiredInformRanges(String treeName) {
-        return informMatcherActionRanges.computeIfAbsent(treeName, k -> Collections.emptySet());
-    }
-
-    public void inform(String key, String value, ParseTree ctx) {
-        inform(key, key, value, ctx);
-        inform(key + "=\"" + value + '"', key, value, ctx);
-    }
-
-    private void inform(String match, String key, String value, ParseTree ctx) {
-        Set<MatcherAction> relevantActions = informMatcherActions.get(match.toLowerCase(Locale.ENGLISH));
-        if (verbose) {
-            if (relevantActions == null) {
-                LOG.info("--- Have (0): {}", match);
-            } else {
-                LOG.info("+++ Have ({}): {}", relevantActions.size(), match);
-
-                int count = 1;
-                for (MatcherAction action : relevantActions) {
-                    LOG.info("+++ -------> ({}): {}", count, action.toString());
-                    count++;
-                }
-            }
-        }
-
-        if (relevantActions != null) {
-            for (MatcherAction matcherAction : relevantActions) {
-                matcherAction.inform(key, value, ctx);
-            }
-        }
-    }
-
-    public void preHeat(int preheatIterations) {
-        if (!testCases.isEmpty()) {
-            if (preheatIterations > 0) {
-                LOG.info("Preheating JVM by running {} testcases.", preheatIterations);
-                int remainingIterations = preheatIterations;
-                int goodResults = 0;
-                while (remainingIterations > 0) {
-                    for (Map<String, Map<String, String>> test : testCases) {
-                        Map<String, String> input = test.get("input");
-                        if (input == null) {
-                            continue;
-                        }
-
-                        String userAgentString = input.get("user_agent_string");
-                        if (userAgentString == null) {
-                            continue;
-                        }
-                        remainingIterations--;
-                        //Calculate and use result to guarantee not optimized away.
-                        if(!parse(userAgentString).hasSyntaxError()) goodResults++;
-                        if (remainingIterations <= 0) {
-                            break;
-                        }
-                    }
-                }
-                LOG.info("Preheating JVM completed. ({} proper results)", preheatIterations, goodResults);
-            }
-        }
     }
 
     // ===============================================================================================================
 
-    public static class GetAllPathsAnalyzer extends Analyzer {
-        final List<String> values = new ArrayList<>(128);
-        final UserAgentTreeFlattener flattener;
-
-        private final UserAgent result;
-
-        GetAllPathsAnalyzer(String useragent) {
-            flattener = new UserAgentTreeFlattener(this);
-            result = flattener.parse(useragent);
-        }
-
-        public List<String> getValues() {
-            return values;
-        }
-
-        public UserAgent getResult() {
-            return result;
-        }
-
-        public void inform(String path, String value, ParseTree ctx) {
+    @SuppressWarnings({"unused"})
+    public static Collection<String> getAllPaths(String agent) {
+        final Collection<String> values = new ArrayDeque<>(128);
+        UserAgentTreeFlattener.parse(new UserAgent(agent), Collections.emptyMap(), (path, value, ctx) -> {
             values.add(path);
             values.add(path + "=\"" + value + "\"");
-        }
-
-        public void informMeAbout(MatcherAction matcherAction, String keyPattern) {
-        }
-    }
-
-    @SuppressWarnings({"unused"})
-    public static List<String> getAllPaths(String agent) {
-        return new GetAllPathsAnalyzer(agent).getValues();
-    }
-
-    public static GetAllPathsAnalyzer getAllPathsAnalyzer(String agent) {
-        return new GetAllPathsAnalyzer(agent);
+        });
+        return values;
     }
 
     // ===============================================================================================================
@@ -888,28 +282,24 @@ config:
 
     @SuppressWarnings({"UnusedReturnValue", "unused"})
     public static class Builder {
-        private final UserAgentAnalyzer uaa;
-        private int preheatIterations = 0;
+        private final Function<Builder, UserAgentAnalyzer> buildFunction;
+        // If we want ALL fields this is null. If we only want specific fields this is a list of names.
+        public List<String> wantedFieldNames = null;
+        public boolean showMatcherLoadStats = true;
 
         protected Builder() {
-            this.uaa = new UserAgentAnalyzer(false)
-                .setShowMatcherStats(false);
+            this( builder -> new UserAgentAnalyzer("classpath*:UserAgents/**/*.yaml", builder.wantedFieldNames, builder.showMatcherLoadStats));
         }
 
-        protected Builder(UserAgentAnalyzer forceAnalyzer) {
-            this.uaa = forceAnalyzer;
-        }
-
-        public Builder preheat(int iterations) {
-            this.preheatIterations = iterations;
-            return this;
+        public Builder(Function<Builder, UserAgentAnalyzer> buildFunction) {
+            this.buildFunction = buildFunction;
         }
 
         public Builder withField(String fieldName) {
-            if (uaa.wantedFieldNames == null) {
-                uaa.wantedFieldNames = new ArrayList<>(32);
+            if (wantedFieldNames == null) {
+                wantedFieldNames = new ArrayList<>(32);
             }
-            uaa.wantedFieldNames.add(fieldName);
+            wantedFieldNames.add(fieldName);
             return this;
         }
 
@@ -924,28 +314,28 @@ config:
         }
 
         public Builder withAllFields() {
-            uaa.wantedFieldNames = null;
+            wantedFieldNames = null;
             return this;
         }
 
         public Builder showMatcherLoadStats() {
-            uaa.setShowMatcherStats(true);
+            showMatcherLoadStats = true;
             return this;
         }
 
         public Builder hideMatcherLoadStats() {
-            uaa.setShowMatcherStats(false);
+            showMatcherLoadStats = false;
             return this;
         }
 
         private void addGeneratedFields(String result, String... dependencies) {
-            if (uaa.wantedFieldNames.contains(result)) {
-                Collections.addAll(uaa.wantedFieldNames, dependencies);
+            if (wantedFieldNames.contains(result)) {
+                Collections.addAll(wantedFieldNames, dependencies);
             }
         }
 
         public UserAgentAnalyzer build() {
-            if (uaa.wantedFieldNames != null) {
+            if (wantedFieldNames != null) {
                 addGeneratedFields("AgentNameVersion", AGENT_NAME, AGENT_VERSION);
                 addGeneratedFields("AgentNameVersionMajor", AGENT_NAME, AGENT_VERSION_MAJOR);
                 addGeneratedFields("WebviewAppNameVersionMajor", "WebviewAppName", "WebviewAppVersionMajor");
@@ -958,14 +348,9 @@ config:
                 addGeneratedFields("WebviewAppVersionMajor", "WebviewAppVersion");
 
                 // Special field that affects ALL fields.
-                uaa.wantedFieldNames.add(SET_ALL_FIELDS);
+                wantedFieldNames.add(SET_ALL_FIELDS);
             }
-            uaa.initialize();
-            if (preheatIterations > 0) {
-                uaa.preHeat(preheatIterations);
-            }
-            return uaa;
+            return buildFunction.apply(this);
         }
-
     }
 }

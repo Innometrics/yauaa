@@ -17,12 +17,16 @@
 
 package nl.basjes.parse.useragent.debug;
 
+import nl.basjes.parse.useragent.ResourceLoader;
 import nl.basjes.parse.useragent.UserAgent;
 import nl.basjes.parse.useragent.UserAgentAnalyzer;
-import nl.basjes.parse.useragent.analyze.Matcher;
-import nl.basjes.parse.useragent.analyze.MatchesList.Match;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.AppenderRef;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.config.LoggerConfig;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -33,18 +37,57 @@ import static nl.basjes.parse.useragent.UserAgent.NULL_VALUE;
 import static nl.basjes.parse.useragent.UserAgent.SYNTAX_ERROR;
 
 public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
-    private static final Logger LOG = LoggerFactory.getLogger(UserAgentAnalyzerTester.class);
+    private static final Logger LOG = LogManager.getLogger(UserAgentAnalyzerTester.class);
+    private List<Map<String, Map<String, String>>> testCases;
+
+    private final static LoggerConfig verboseLogger = createVerboseLogger();
+
+    private static LoggerConfig createVerboseLogger() {
+        Configuration config = LoggerContext.getContext(false).getConfiguration();
+        List<AppenderRef> rootRefs = config.getRootLogger().getAppenderRefs();
+        AppenderRef[] refs = new AppenderRef[rootRefs.size()];
+        int i = 0;
+        for (AppenderRef rootRef : rootRefs)
+            refs[i++] = AppenderRef.createAppenderRef(rootRef.getRef(), null, null);
+
+        LoggerConfig loggerConfig = LoggerConfig.createLogger(false, Level.DEBUG,
+            "nl.basjes.parse.useragent", "true", refs, null, config, null );
+        for (AppenderRef ref : refs)
+            loggerConfig.addAppender(config.getAppender(ref.getRef()), null, null);
+
+        return loggerConfig;
+    }
 
     public UserAgentAnalyzerTester() {
-        super(false);
+        super();
+    }
+
+    public UserAgentAnalyzerTester(String resourceString, List<String> wantedFields, boolean showMatcherStats) {
+        super(resourceString, wantedFields, showMatcherStats);
     }
 
     public UserAgentAnalyzerTester(String resourceString) {
-        super(resourceString);
+        this(resourceString, true);
     }
 
-    public void initialize() {
-        super.initialize();
+    public UserAgentAnalyzerTester(String resourceString, boolean showMatcherStats) {
+        this(resourceString, null, showMatcherStats);
+    }
+
+    public UserAgentAnalyzerTester(boolean showMatcherStats) {
+        this("classpath*:UserAgents/**/*.yaml", showMatcherStats);
+    }
+
+
+    @Override
+    protected ResourceLoader load(String resourceString, List<String> wantedFields, boolean showMatcherStats) {
+        ResourceLoader loader = super.load(resourceString, wantedFields, showMatcherStats);
+        initTests(loader);
+        return loader;
+    }
+
+    public void initTests(ResourceLoader loader) {
+        testCases = loader.testCases;
     }
 
     class TestResult {
@@ -70,6 +113,20 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
         return runTests(showAll, failOnUnexpected, null, false, true);
     }
 
+    @Override
+    public UserAgent createUserAgent(String userAgentString) {
+        return new DebugUserAgent((userAgentString));
+    }
+
+
+    public void setVerbose(boolean enable) {
+        LoggerContext loggerContext = LoggerContext.getContext(false);
+        Configuration config = loggerContext.getConfiguration();
+        if (enable == config.getLoggers().containsKey(verboseLogger.getName())) return;
+        if (enable) config.addLogger(verboseLogger.getName(), verboseLogger);
+        else config.removeLogger(verboseLogger.getName());
+    }
+
     public boolean runTests(boolean showAll,
                             boolean failOnUnexpected,
                             Collection<String> onlyValidateFieldNames,
@@ -79,8 +136,6 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
         if (testCases == null) {
             return allPass;
         }
-        DebugUserAgent agent = new DebugUserAgent();
-
         List<TestResult> results = new ArrayList<>(32);
 
         String filenameHeader = "Test number and source";
@@ -132,20 +187,9 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
             String filename = metaData.get("filename");
             String linenumber = metaData.get("fileline");
 
-            boolean init = false;
-
-            if (options == null) {
-                setVerbose(false);
-                agent.setDebug(false);
-            } else {
-                boolean newVerbose = options.contains("verbose");
-                setVerbose(newVerbose);
-                agent.setDebug(newVerbose);
-                init = options.contains("init");
-            }
-            if (expected == null || expected.size() == 0) {
-                init = true;
-            }
+            setVerbose(options != null && options.contains("verbose"));
+            boolean init = (options != null && options.contains("init"))
+                || expected == null || expected.size() == 0;
 
             String testName = input.get("name");
             String userAgentString = input.get("user_agent_string");
@@ -162,23 +206,21 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
                 sb.append(' ');
             }
 
-            agent.setUserAgentString(userAgentString);
-
-
+            DebugUserAgent agent = null;
             long measuredSpeed=-1;
             if (measureSpeed) {
                 // Preheat
                 for (int i = 0; i < 100; i++) {
-                    parse(agent);
+                    agent = (DebugUserAgent) parse(userAgentString);
                 }
                 long startTime = System.nanoTime();
                 for (int i = 0; i < 1000; i++) {
-                    parse(agent);
+                    agent = (DebugUserAgent) parse(userAgentString);
                 }
                 long stopTime = System.nanoTime();
                 measuredSpeed = (1000000000L*(1000))/(stopTime-startTime);
             } else {
-                parse(agent);
+                agent = (DebugUserAgent) parse(userAgentString);
             }
 
             sb.append('|');
@@ -333,7 +375,7 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
                 sb.append("#    options:\n");
                 sb.append("#    - 'verbose'\n");
                 sb.append("    require:\n");
-                for (String path : getAllPathsAnalyzer(userAgentString).getValues()) {
+                for (String path : getAllPaths(userAgentString)) {
                     if (path.contains("=\"")) {
                         sb.append("#    - '").append(path).append("'\n");
                     }
@@ -462,51 +504,60 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
         return allPass;
     }
 
+    public void preHeat(int preheatIterations) {
+        if (!testCases.isEmpty()) {
+            if (preheatIterations > 0) {
+                LOG.info("Preheating JVM by running {} testcases.", preheatIterations);
+                int remainingIterations = preheatIterations;
+                int goodResults = 0;
+                while (remainingIterations > 0) {
+                    for (Map<String, Map<String, String>> test : testCases) {
+                        Map<String, String> input = test.get("input");
+                        if (input == null) {
+                            continue;
+                        }
 
-    // ===============================================================================================================
-
-    /**
-     * This function is used only for analyzing which patterns that could possibly be relevant
-     * were actually relevant for the matcher actions
-     */
-    public List<Match> getMatches() {
-        List<Match> allMatches = new ArrayList<>(128);
-        for (Matcher matcher: allMatchers) {
-            allMatches.addAll(matcher.getMatches());
+                        String userAgentString = input.get("user_agent_string");
+                        if (userAgentString == null) {
+                            continue;
+                        }
+                        remainingIterations--;
+                        //Calculate and use result to guarantee not optimized away.
+                        if(!parse(userAgentString).hasSyntaxError()) goodResults++;
+                        if (remainingIterations <= 0) {
+                            break;
+                        }
+                    }
+                }
+                LOG.info("Preheating JVM completed. ({} proper results)", preheatIterations, goodResults);
+            }
         }
-        return allMatches;
     }
-
-    public List<Match> getUsedMatches(UserAgent userAgent) {
-        // Reset all Matchers
-        for (Matcher matcher : allMatchers) {
-            matcher.reset();
-            matcher.setVerboseTemporarily(false);
-        }
-
-        flattener.parse(userAgent);
-
-        List<Match> allMatches = new ArrayList<>(128);
-        for (Matcher matcher: allMatchers) {
-            allMatches.addAll(matcher.getUsedMatches());
-        }
-        return allMatches;
-    }
-
 
     public static UserAgentAnalyzerTester.Builder newBuilder() {
         return new UserAgentAnalyzerTester.Builder();
     }
 
     public static class Builder extends UserAgentAnalyzer.Builder {
+        private int preheatIterations = 0;
 
         public Builder() {
-            super(new UserAgentAnalyzerTester());
+            super(builder -> new UserAgentAnalyzerTester("classpath*:UserAgents/**/*.yaml", builder.wantedFieldNames, builder.showMatcherLoadStats));
         }
 
         @Override
         public UserAgentAnalyzerTester build() {
-            return (UserAgentAnalyzerTester)super.build();
+            UserAgentAnalyzerTester uaa = (UserAgentAnalyzerTester)super.build();
+            if (preheatIterations > 0) {
+                uaa.preHeat(preheatIterations);
+            }
+
+            return uaa;
+        }
+
+        public UserAgentAnalyzer.Builder preheat(int iterations) {
+            this.preheatIterations = iterations;
+            return this;
         }
 
         @Override
@@ -539,6 +590,4 @@ public class UserAgentAnalyzerTester extends UserAgentAnalyzer {
             return this;
         }
     }
-
-
 }

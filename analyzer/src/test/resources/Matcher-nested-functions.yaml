@@ -59,7 +59,7 @@ config:
         user_agent_string: 'MoZillA/1_2.3123'
       expected:
         A : 'Ugly'
-        B : '<<<null>>>'
+        B : 'Unknown'
         C : 'Ugly'
 
 

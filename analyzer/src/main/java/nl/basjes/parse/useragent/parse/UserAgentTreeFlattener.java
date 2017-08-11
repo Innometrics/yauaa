@@ -18,7 +18,6 @@
 package nl.basjes.parse.useragent.parse;
 
 import nl.basjes.parse.useragent.UserAgent;
-import nl.basjes.parse.useragent.analyze.Analyzer;
 import nl.basjes.parse.useragent.analyze.WordRangeVisitor.Range;
 import nl.basjes.parse.useragent.parser.UserAgentBaseListener;
 import nl.basjes.parse.useragent.parser.UserAgentLexer;
@@ -64,8 +63,13 @@ import org.antlr.v4.runtime.tree.ParseTreeProperty;
 import org.antlr.v4.runtime.tree.ParseTreeWalker;
 import org.apache.commons.lang3.tuple.Pair;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.io.Serializable;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static nl.basjes.parse.useragent.UserAgent.SYNTAX_ERROR;
@@ -74,50 +78,66 @@ import static nl.basjes.parse.useragent.utils.AntlrUtils.getSourceText;
 //import static nl.basjes.parse.useragent.analyze.WordRangeVisitor.MAX_RANGE_IN_HASHMAP;
 
 public class UserAgentTreeFlattener extends UserAgentBaseListener implements Serializable {
-    private static final ParseTreeWalker WALKER = new ParseTreeWalker();
-    private final Analyzer analyzer;
+    private static final Logger LOG = LogManager.getLogger(UserAgentTreeFlattener.class);
 
-    enum PathType {
-        CHILD,
-        COMMENT,
-        VERSION
+    public interface Analyzer {
+        void inform(String path, String value, ParseTree ctx);
     }
 
-    public class State {
+    private final Analyzer analyzer;
+    private final Map<String, Set<Range>> informMatcherActionRanges;
+    private final ParseTreeProperty<State> states = new ParseTreeProperty<>();
+
+    private enum PathType {
+        CHILD,
+        COMMENT,
+        VERSION;
+
+        static PathType get(String name) {
+            switch (name) {
+                case "comments": return PathType.COMMENT;
+                case "version": return  PathType.VERSION;
+                default: return PathType.CHILD;
+            }
+        }
+    }
+
+    private final class State {
         long child = 0;
         long version = 0;
         long comment = 0;
         final String name;
-        String path;
-        ParseTree ctx = null;
+        final String path;
 
-        public State(String name) {
+        private State(String name, UserAgentContext rootContext) {
             this.name = name;
+            this.path = name;
+            states.put(rootContext, this);
         }
 
-        public State(ParseTree ctx, String name) {
-            this.ctx = ctx;
+        private State(String name, ParseTree ctx, boolean fakeChild) {
             this.name = name;
+            if (!fakeChild) states.put(ctx, this);
+            path = calculatePath(ctx, fakeChild);
         }
 
-        public String calculatePath(PathType type, boolean fakeChild) {
+        private String calculatePath(ParseTree ctx, boolean fakeChild) {
             ParseTree node = ctx;
-            path = name;
             if (node == null) {
-                return path;
+                return name;
             }
             State parentState = null;
 
             while (parentState == null) {
                 node = node.getParent();
                 if (node == null) {
-                    return path;
+                    return name;
                 }
-                parentState = state.get(node);
+                parentState = states.get(node);
             }
 
             long counter = 0;
-            switch (type) {
+            switch (PathType.get(name)) {
                 case CHILD:
                     if (!fakeChild) {
                         parentState.child++;
@@ -139,64 +159,32 @@ public class UserAgentTreeFlattener extends UserAgentBaseListener implements Ser
                 default:
             }
 
-            this.path = parentState.path + ".(" + counter + ')' + name;
-
-            return this.path;
+            return parentState.path + ".(" + counter + ')' + name;
         }
     }
 
-    private ParseTreeProperty<State> state;
 
-    public UserAgentTreeFlattener(Analyzer analyzer) {
+    private UserAgentTreeFlattener(Analyzer analyzer, Map<String, Set<Range>> informMatcherActionRanges) {
         this.analyzer = analyzer;
+        this.informMatcherActionRanges = informMatcherActionRanges;
     }
 
-    private boolean verbose = false;
-
-    public void setVerbose(boolean newVerbose) {
-        this.verbose = newVerbose;
-    }
-
-    public UserAgent parse(String userAgentString) {
-        UserAgent userAgent = new UserAgent(userAgentString);
-        return parseIntoCleanUserAgent(userAgent);
-    }
-
-    public UserAgent parse(UserAgent userAgent) {
-        userAgent.reset();
-        return parseIntoCleanUserAgent(userAgent);
-    }
-
-    /**
-     * Parse the useragent and return every part that was found.
-     *
-     * @param userAgent The useragent instance that needs to be parsed
-     * @return If the parse was valid (i.e. were there any parser errors: true=valid; false=has errors
-     */
-    private UserAgent parseIntoCleanUserAgent(UserAgent userAgent) {
+    public static void parse(UserAgent userAgent, Map<String, Set<Range>> informMatcherActionRanges, Analyzer analyzer) {
         if (userAgent.getUserAgentString() == null) {
             userAgent.set(SYNTAX_ERROR, "true", 1);
-            return userAgent; // Cannot parse this
+        } else {
+            new UserAgentTreeFlattener(analyzer, informMatcherActionRanges).parse(userAgent);
         }
+    }
 
+    private void parse(UserAgent userAgent) {
         // Parse the userAgent into tree
         UserAgentContext userAgentContext = parseUserAgent(userAgent);
 
         // Walk the tree an inform the calling analyzer about all the nodes found
-        state = new ParseTreeProperty<>();
-
-        State rootState = new State("agent");
-        rootState.calculatePath(PathType.CHILD, false);
-        state.put(userAgentContext, rootState);
-
-        if (userAgent.hasSyntaxError()) {
-            inform(null, SYNTAX_ERROR, "true");
-        } else {
-            inform(null, SYNTAX_ERROR, "false");
-        }
-
-        WALKER.walk(this, userAgentContext);
-        return userAgent;
+        new State("agent", userAgentContext);
+        inform(null, SYNTAX_ERROR, Boolean.toString(userAgent.hasSyntaxError()));
+        ParseTreeWalker.DEFAULT.walk(this, userAgentContext);
     }
 
     // =================================================================================
@@ -214,29 +202,10 @@ public class UserAgentTreeFlattener extends UserAgentBaseListener implements Ser
     }
 
     private String inform(ParseTree stateCtx, ParseTree ctx, String name, String value, boolean fakeChild) {
-        State myState = new State(stateCtx, name);
-
-        if (!fakeChild) {
-            state.put(stateCtx, myState);
-        }
-
-        PathType childType;
-        switch (name) {
-            case "comments":
-                childType = PathType.COMMENT;
-                break;
-            case "version":
-                childType = PathType.VERSION;
-                break;
-            default:
-                childType = PathType.CHILD;
-        }
-
-        String path = myState.calculatePath(childType, fakeChild);
+        String path = new State(name, stateCtx, fakeChild).path;
         analyzer.inform(path, value, ctx);
         return path;
     }
-
 //  =================================================================================
 
     private UserAgentContext parseUserAgent(UserAgent userAgent) {
@@ -249,7 +218,7 @@ public class UserAgentTreeFlattener extends UserAgentBaseListener implements Ser
 
         UserAgentParser parser = new UserAgentParser(tokens);
 
-        if (!verbose) {
+        if (!LOG.isDebugEnabled()) {
             lexer.removeErrorListeners();
             parser.removeErrorListeners();
         }
@@ -257,6 +226,10 @@ public class UserAgentTreeFlattener extends UserAgentBaseListener implements Ser
         parser.addErrorListener(userAgent);
 
         return parser.userAgent();
+    }
+
+    private Set<Range> getRequiredInformRanges(String treeName) {
+        return informMatcherActionRanges.getOrDefault(treeName, Collections.emptySet());
     }
 
     //  =================================================================================
@@ -402,7 +375,7 @@ public class UserAgentTreeFlattener extends UserAgentBaseListener implements Ser
     private void informSubstrings(ParserRuleContext ctx, String name, boolean fakeChild, Splitter splitter) {
         String text = getSourceText(ctx);
         String path = inform(ctx, name, text, fakeChild);
-        Set<Range> ranges = analyzer.getRequiredInformRanges(path);
+        Set<Range> ranges = getRequiredInformRanges(path);
 
         if (ranges.size() > 4) { // Benchmarks showed this to be the breakeven point. (see below)
             List<Pair<Integer, Integer>> splitList = splitter.createSplitList(text);

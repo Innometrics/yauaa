@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Log" target="SYSTEM_ERR" direct="true">
+      <PatternLayout pattern="%msg%n%throwable"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Root level="INFO">
+      <AppenderRef ref="Log"/>
+    </Root>
+  </Loggers>
+</Configuration>

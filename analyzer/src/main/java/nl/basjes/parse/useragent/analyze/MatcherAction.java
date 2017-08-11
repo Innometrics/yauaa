@@ -17,405 +17,75 @@
 
 package nl.basjes.parse.useragent.analyze;
 
-import nl.basjes.parse.useragent.analyze.WordRangeVisitor.Range;
-import nl.basjes.parse.useragent.analyze.treewalker.TreeExpressionEvaluator;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerBaseVisitor;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerLexer;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherBaseContext;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherNormalizeBrandContext;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherRequireContext;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherWordRangeContext;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepContainsValueContext;
-import nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepWordRangeContext;
-import org.antlr.v4.runtime.ANTLRErrorListener;
-import org.antlr.v4.runtime.CharStreams;
-import org.antlr.v4.runtime.CodePointCharStream;
-import org.antlr.v4.runtime.CommonToken;
-import org.antlr.v4.runtime.CommonTokenStream;
-import org.antlr.v4.runtime.Parser;
-import org.antlr.v4.runtime.ParserRuleContext;
-import org.antlr.v4.runtime.RecognitionException;
-import org.antlr.v4.runtime.Recognizer;
-import org.antlr.v4.runtime.Token;
-import org.antlr.v4.runtime.atn.ATNConfigSet;
-import org.antlr.v4.runtime.dfa.DFA;
+
+import nl.basjes.parse.useragent.analyze.treewalker.steps.WalkList;
 import org.antlr.v4.runtime.tree.ParseTree;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.Serializable;
-import java.util.BitSet;
-
-import static nl.basjes.parse.useragent.analyze.NumberRangeVisitor.NUMBER_RANGE_VISITOR;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.BasePathContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherCleanVersionContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherPathContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherPathIsNullContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.MatcherPathLookupContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.PathContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.PathFixedValueContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.PathWalkContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepDownContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepEndsWithValueContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepEqualsValueContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepNotEqualsValueContext;
-import static nl.basjes.parse.useragent.parser.UserAgentTreeWalkerParser.StepStartsWithValueContext;
+import java.util.Collection;
 
 public abstract class MatcherAction implements Serializable {
 
-    private String matchExpression;
-    private TreeExpressionEvaluator evaluator;
+    final String matchExpression;
+    final WalkList walkList;
 
-    TreeExpressionEvaluator getEvaluatorForUnitTesting() {
-        return evaluator;
-    }
+    private static final Logger LOG = LogManager.getLogger(MatcherAction.class);
 
-    private static final Logger LOG = LoggerFactory.getLogger(MatcherAction.class);
+    public static class Match {
+        public final String key;
+        public final String value;
+        public final ParseTree result;
 
-
-    private Matcher matcher;
-    private MatchesList matches;
-    private boolean mustHaveMatches = false;
-
-    boolean mustHaveMatches() {
-        return mustHaveMatches;
-    }
-
-    boolean verbose = false;
-    private boolean verbosePermanent = false;
-    private boolean verboseTemporary = false;
-
-    private void setVerbose(boolean newVerbose) {
-        setVerbose(newVerbose, false);
-    }
-
-    public void setVerbose(boolean newVerbose, boolean temporary) {
-        this.verbose = newVerbose;
-        if (!temporary) {
-            this.verbosePermanent = newVerbose;
-        }
-        this.verboseTemporary = temporary;
-    }
-
-    public String getMatchExpression() {
-        return matchExpression;
-    }
-
-    class InitErrorListener implements ANTLRErrorListener {
-        @Override
-        public void syntaxError(
-                Recognizer<?, ?> recognizer,
-                Object offendingSymbol,
-                int line,
-                int charPositionInLine,
-                String msg,
-                RecognitionException e) {
-            LOG.error("Syntax error");
-            LOG.error("Source : {}", matchExpression);
-            LOG.error("Message: {}", msg);
-            throw new InvalidParserConfigurationException("Syntax error \"" + msg + "\" caused by \"" + matchExpression + "\".");
-        }
-
-        @Override
-        public void reportAmbiguity(
-                Parser recognizer,
-                DFA dfa,
-                int startIndex,
-                int stopIndex,
-                boolean exact,
-                BitSet ambigAlts,
-                ATNConfigSet configs) {
-            // Ignore this type of problem
-        }
-
-        @Override
-        public void reportAttemptingFullContext(
-                Parser recognizer,
-                DFA dfa,
-                int startIndex,
-                int stopIndex,
-                BitSet conflictingAlts,
-                ATNConfigSet configs) {
-            // Ignore this type of problem
-        }
-
-        @Override
-        public void reportContextSensitivity(
-                Parser recognizer,
-                DFA dfa,
-                int startIndex,
-                int stopIndex,
-                int prediction,
-                ATNConfigSet configs) {
-            // Ignore this type of problem
+        public Match(String key, String value, ParseTree result) {
+            this.key = key;
+            this.value = value;
+            this.result = result;
         }
     }
 
-    void init(String newMatchExpression, Matcher newMatcher) {
-        this.matcher = newMatcher;
-        this.matchExpression = newMatchExpression;
-        setVerbose(newMatcher.getVerbose());
+    final boolean usesIsNull;
 
-        InitErrorListener errorListener = new InitErrorListener();
-
-        CodePointCharStream input = CharStreams.fromString(this.matchExpression);
-        UserAgentTreeWalkerLexer lexer = new UserAgentTreeWalkerLexer(input);
-
-        lexer.addErrorListener(errorListener);
-
-        CommonTokenStream tokens = new CommonTokenStream(lexer);
-        UserAgentTreeWalkerParser parser = new UserAgentTreeWalkerParser(tokens);
-
-        parser.addErrorListener(errorListener);
-
-//        parser.setTrace(true);
-        ParserRuleContext requiredPattern = parseWalkerExpression(parser);
-
-        if (requiredPattern == null) {
-            throw new InvalidParserConfigurationException("NO pattern ?!?!?");
-        }
-
-        // We couldn't ditch the double quotes around the fixed values in the parsing pase.
-        // So we ditch them here. We simply walk the tree and modify some of the tokens.
-        new UnQuoteValues().visit(requiredPattern);
-
-        // Now we create an evaluator instance
-        evaluator = new TreeExpressionEvaluator(requiredPattern, matcher.lookups, verbose);
-
-        // Is a fixed value (i.e. no events will ever be fired)?
-        String fixedValue = evaluator.getFixedValue();
-        if (fixedValue != null) {
-            setFixedValue(fixedValue);
-            mustHaveMatches = false;
-            matches = new MatchesList(0);
-            return; // Not interested in any patterns
-        }
-
-        mustHaveMatches = !evaluator.usesIsNull();
-
-        int informs = calculateInformPath("agent", requiredPattern);
-
-        int listSize = 0;
-        if (informs > 0) {
-            listSize = 1;
-        }
-        this.matches = new MatchesList(listSize);
+    MatcherAction(String matchExpression, WalkList walkList) {
+        this.matchExpression = matchExpression;
+        this.walkList = walkList;
+        usesIsNull = walkList.usesIsNull();
     }
-
-    protected abstract ParserRuleContext parseWalkerExpression(UserAgentTreeWalkerParser parser);
-
-    private static class UnQuoteValues extends UserAgentTreeWalkerBaseVisitor<Void> {
-        private void unQuoteToken(Token token) {
-            if (token instanceof CommonToken) {
-                CommonToken commonToken = (CommonToken) token;
-                commonToken.setStartIndex(commonToken.getStartIndex() + 1);
-                commonToken.setStopIndex(commonToken.getStopIndex() - 1);
-            }
-        }
-
-        @Override
-        public Void visitMatcherPathLookup(MatcherPathLookupContext ctx) {
-            unQuoteToken(ctx.defaultValue);
-            return super.visitMatcherPathLookup(ctx);
-        }
-
-        @Override
-        public Void visitPathFixedValue(PathFixedValueContext ctx) {
-            unQuoteToken(ctx.value);
-            return super.visitPathFixedValue(ctx);
-        }
-
-        @Override
-        public Void visitStepEqualsValue(StepEqualsValueContext ctx) {
-            unQuoteToken(ctx.value);
-            return super.visitStepEqualsValue(ctx);
-        }
-
-        @Override
-        public Void visitStepNotEqualsValue(StepNotEqualsValueContext ctx) {
-            unQuoteToken(ctx.value);
-            return super.visitStepNotEqualsValue(ctx);
-        }
-
-        @Override
-        public Void visitStepStartsWithValue(StepStartsWithValueContext ctx) {
-            unQuoteToken(ctx.value);
-            return super.visitStepStartsWithValue(ctx);
-        }
-
-        @Override
-        public Void visitStepEndsWithValue(StepEndsWithValueContext ctx) {
-            unQuoteToken(ctx.value);
-            return super.visitStepEndsWithValue(ctx);
-        }
-
-        @Override
-        public Void visitStepContainsValue(StepContainsValueContext ctx) {
-            unQuoteToken(ctx.value);
-            return super.visitStepContainsValue(ctx);
-        }
-    }
-
-    protected abstract void setFixedValue(String newFixedValue);
-
-    /**
-     * For each key that this action wants to be notified for this method is called.
-     * Note that on a single parse event the same name CAN be called multiple times!!
-     *
-     * @param key    The key of the node
-     * @param result The node in the parser tree where the match occurred
-     */
-    public void inform(String key, String value, ParseTree result) {
-        // Only if this needs input we tell the matcher on the first one.
-        if (mustHaveMatches && matches.isEmpty()) {
-            matcher.gotMyFirstStartingPoint();
-        }
-        matches.add(key, value, result);
-    }
-
-    protected abstract void inform(String key, String foundValue);
 
     /**
      * @return If it is impossible that this can be valid it returns true, else false.
      */
-    boolean cannotBeValid() {
-        return mustHaveMatches && matches.isEmpty();
-    }
+    public abstract boolean notValid(Collection<Match> matches);
 
     /**
      * Called after all nodes have been notified.
-     * @return true if the obtainResult result was valid. False will fail the entire matcher this belongs to.
+     *
+     * @return the value if the obtainResult result was valid. null will fail the entire matcher this belongs to.
      */
-    public abstract boolean obtainResult();
-
-    boolean isValidIsNull() {
-        if (matches.isEmpty()) {
-            if (evaluator.usesIsNull()) {
-                return true;
-            }
-        }
-        return false;
-    }
+    public abstract String obtainResult(Collection<Match> matches);
 
     /**
      * Optimization: Only if there is a possibility that all actions for this matcher CAN be valid do we
      * actually perform the analysis and do the (expensive) tree walking and matching.
      */
-    void processInformedMatches() {
-        for (MatchesList.Match match : matches) {
-            String matchedValue = evaluator.evaluate(match.result, match.key, match.value);
-            if (matchedValue != null) {
-                inform(match.key, matchedValue);
-                break; // We always stick to the first match
-            }
+    String processInformedMatches(Collection<Match> matches) {
+        for (Match match : matches) {
+            String matchedValue = evaluate(match.result, match.key, match.value);
+            if (matchedValue != null) return matchedValue;
         }
+        return null;
     }
 
-    // ============================================================================================================
+    private String evaluate(ParseTree tree, String key, String value) {
+        if(!LOG.isDebugEnabled())
+            return walkList.walk(tree, value);
 
-    // -----
-    private int calculateInformPath(@SuppressWarnings("SameParameterValue") String treeName, ParserRuleContext tree) {
-        if (tree instanceof MatcherRequireContext) {
-            return calculateInformPath(treeName, ((MatcherRequireContext) tree));
-        }
-        if (tree instanceof MatcherContext){
-            return calculateInformPath(treeName, ((MatcherContext) tree));
-        }
-        return 0;
-    }
-
-    private int calculateInformPath(String treeName, MatcherRequireContext tree) {
-        if (tree instanceof MatcherBaseContext) {
-            return calculateInformPath(treeName, ((MatcherBaseContext) tree).matcher());
-        }
-        if (tree instanceof MatcherPathIsNullContext){
-            return calculateInformPath(treeName, ((MatcherPathIsNullContext) tree).matcher());
-        }
-        return 0;
-    }
-
-    private int calculateInformPath(String treeName, MatcherContext tree) {
-        if (tree instanceof MatcherPathContext) {
-            return calculateInformPath(treeName, ((MatcherPathContext) tree).basePath());
-        }
-        if (tree instanceof MatcherCleanVersionContext){
-            return calculateInformPath(treeName, ((MatcherCleanVersionContext) tree).matcher());
-        }
-        if (tree instanceof MatcherNormalizeBrandContext){
-            return calculateInformPath(treeName, ((MatcherNormalizeBrandContext) tree).matcher());
-        }
-        if (tree instanceof MatcherPathLookupContext){
-            return calculateInformPath(treeName, ((MatcherPathLookupContext) tree).matcher());
-        }
-        if (tree instanceof MatcherWordRangeContext){
-            return calculateInformPath(treeName, ((MatcherWordRangeContext) tree).matcher());
-        }
-        return 0;
-    }
-
-    // -----
-
-    private int calculateInformPath(String treeName, BasePathContext tree) {
-        // Useless to register a fixed value
-//             case "PathFixedValueContext"         : calculateInformPath(treeName, (PathFixedValueContext)         tree); break;
-        if (tree instanceof PathWalkContext) {
-            return calculateInformPath(treeName, ((PathWalkContext) tree).nextStep);
-        }
-        return 0;
-    }
-
-    private int calculateInformPath(String treeName, PathContext tree) {
-        if (tree != null) {
-            if (tree instanceof StepDownContext){
-                return calculateInformPath(treeName, (StepDownContext) tree);
-            }
-            if (tree instanceof StepEqualsValueContext){
-                return calculateInformPath(treeName, (StepEqualsValueContext) tree);
-            }
-            if (tree instanceof StepWordRangeContext) {
-                return calculateInformPath(treeName, (StepWordRangeContext) tree);
-            }
-        }
-        matcher.informMeAbout(this, treeName);
-        return 1;
-    }
-    // -----
-
-    private int calculateInformPath(String treeName, StepDownContext tree) {
-        if (treeName.length() == 0) {
-            return calculateInformPath(treeName + '.' + tree.name.getText(), tree.nextStep);
-        }
-
-        int informs = 0;
-        for (Integer number : NUMBER_RANGE_VISITOR.visit(tree.numberRange())) {
-            informs += calculateInformPath(treeName + '.' + "(" + number + ")" + tree.name.getText(), tree.nextStep);
-        }
-        return informs;
-    }
-
-    private int calculateInformPath(String treeName, StepEqualsValueContext tree) {
-        matcher.informMeAbout(this, treeName + "=\"" + tree.value.getText() + "\"");
-        return 1;
-    }
-
-    private int calculateInformPath(String treeName, StepWordRangeContext tree) {
-        Range range = WordRangeVisitor.getRange(tree.wordRange());
-        matcher.lookingForRange(treeName, range);
-        return calculateInformPath(treeName + "[" + range.first + "-" + range.last + "]", tree.nextStep);
-    }
-
-    // ============================================================================================================
-
-    public void reset() {
-        matches.clear();
-        if (verboseTemporary) {
-            verbose = verbosePermanent;
-        }
-    }
-
-    public MatchesList getMatches() {
-        return matches;
+        LOG.debug("Evaluate: {} => {}", key, value);
+        //LOG.debug("Pattern : {}", requiredPattern.getText());
+        LOG.debug("WalkList: {}", walkList.toString());
+        String result = walkList.walk(tree, value);
+        LOG.debug("Evaluate: Result = {}", result);
+        return result;
     }
 }

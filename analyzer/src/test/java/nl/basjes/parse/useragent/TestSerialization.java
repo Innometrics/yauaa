@@ -18,10 +18,10 @@
 package nl.basjes.parse.useragent;
 
 import nl.basjes.parse.useragent.debug.UserAgentAnalyzerTester;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -35,7 +35,7 @@ import static org.junit.Assert.assertTrue;
 
 public class TestSerialization {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TestSerialization.class);
+    private static final Logger LOG = LogManager.getLogger(TestSerialization.class);
 
     protected static UserAgentAnalyzerTester uaa;
 
@@ -45,8 +45,6 @@ public class TestSerialization {
         LOG.info("Create");
         LOG.info("--------------------------------------------------------------");
         uaa = new UserAgentAnalyzerTester();
-        uaa.setShowMatcherStats(false);
-        uaa.initialize();
 
         LOG.info("--------------------------------------------------------------");
         LOG.info("Serialize");

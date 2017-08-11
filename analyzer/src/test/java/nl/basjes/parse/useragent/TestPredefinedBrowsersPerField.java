@@ -18,13 +18,13 @@
 package nl.basjes.parse.useragent;
 
 import nl.basjes.parse.useragent.debug.UserAgentAnalyzerTester;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -35,13 +35,11 @@ import static org.junit.Assert.assertTrue;
 @RunWith(Parameterized.class)
 public class TestPredefinedBrowsersPerField {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TestPredefinedBrowsersPerField.class);
+    private static final Logger LOG = LogManager.getLogger(TestPredefinedBrowsersPerField.class);
 
     @Parameters(name = "Test {index} -> Only field: \"{0}\"")
     public static Iterable<String> data() {
-        UserAgentAnalyzerTester uaa = new UserAgentAnalyzerTester();
-        uaa.setShowMatcherStats(false);
-        uaa.initialize();
+        UserAgentAnalyzerTester uaa = new UserAgentAnalyzerTester(false);
         return uaa.getAllPossibleFieldNamesSorted();
     }
 
